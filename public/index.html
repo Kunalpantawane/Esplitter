@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Esplitter – Group Expense Tracker</title>
+  <meta name="description" content="Track shared expenses with friends, roommates, and travel groups — offline first." />
+  <link rel="stylesheet" href="/css/style.css" />
+  <link rel="manifest" href="/manifest.json" />
+</head>
+<body>
+
+  <!-- Network Status Banner -->
+  <div id="network-banner" class="network-banner hidden"></div>
+
+  <!-- ============ AUTH SCREEN ============ -->
+  <div id="screen-auth" class="screen active">
+    <div class="auth-container">
+      <div class="logo">
+        <span class="logo-icon">💸</span>
+        <h1>Esplitter</h1>
+        <p>Group expenses, made simple</p>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="login">Login</button>
+        <button class="tab-btn" data-tab="register">Register</button>
+      </div>
+
+      <form id="form-login" class="auth-form active">
+        <div class="form-group">
+          <label for="login-email">Email</label>
+          <input type="email" id="login-email" placeholder="you@example.com" required />
+        </div>
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <input type="password" id="login-password" placeholder="••••••••" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Login</button>
+        <p id="login-error" class="form-error"></p>
+      </form>
+
+      <form id="form-register" class="auth-form">
+        <div class="form-group">
+          <label for="reg-name">Name</label>
+          <input type="text" id="reg-name" placeholder="Your Name" required />
+        </div>
+        <div class="form-group">
+          <label for="reg-email">Email</label>
+          <input type="email" id="reg-email" placeholder="you@example.com" required />
+        </div>
+        <div class="form-group">
+          <label for="reg-password">Password</label>
+          <input type="password" id="reg-password" placeholder="Min. 6 characters" required minlength="6" />
+        </div>
+        <button type="submit" class="btn btn-primary">Create Account</button>
+        <p id="register-error" class="form-error"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ DASHBOARD SCREEN ============ -->
+  <div id="screen-dashboard" class="screen">
+    <header class="app-header">
+      <div class="header-left">
+        <span class="logo-small">💸 Esplitter</span>
+      </div>
+      <div class="header-right">
+        <span id="user-name-badge" class="user-badge"></span>
+        <button id="btn-logout" class="btn btn-ghost btn-sm">Logout</button>
+      </div>
+    </header>
+
+    <main class="dashboard-main">
+      <section class="groups-section">
+        <div class="section-header">
+          <h2>Your Groups</h2>
+          <div class="group-actions">
+            <button id="btn-create-group" class="btn btn-primary btn-sm">+ New</button>
+            <button id="btn-join-group" class="btn btn-secondary btn-sm">Join</button>
+          </div>
+        </div>
+        <div id="groups-list" class="groups-list">
+          <div class="empty-state">No groups yet. Create or join one!</div>
+        </div>
+      </section>
+    </main>
+
+    <div id="sync-indicator" class="sync-indicator">
+      <span id="sync-count" class="sync-count"></span>
+      <button id="btn-manual-sync" class="btn btn-ghost btn-xs">Sync Now</button>
+    </div>
+  </div>
+
+  <!-- ============ GROUP DETAIL SCREEN ============ -->
+  <div id="screen-group" class="screen">
+    <header class="app-header">
+      <button id="btn-back" class="btn btn-ghost">← Back</button>
+      <h2 id="group-title">Group</h2>
+      <div id="invite-code-display" class="invite-code"></div>
+    </header>
+
+    <div class="balance-summary" id="balance-summary"></div>
+
+    <!-- Settlement Section -->
+    <div class="settlement-section" id="settlement-section"></div>
+
+    <div class="section-header" style="padding: 0 16px;">
+      <h3>Expenses</h3>
+      <button id="btn-add-expense" class="btn btn-primary btn-sm">+ Add</button>
+    </div>
+    <div id="expense-list" class="expense-list">
+      <div class="empty-state">No expenses yet.</div>
+    </div>
+  </div>
+
+  <!-- ============ MODALS ============ -->
+
+  <!-- Create Group Modal -->
+  <div id="modal-create-group" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>Create Group</h3>
+      <div class="form-group">
+        <label>Group Name</label>
+        <input type="text" id="create-group-name" placeholder="e.g. Goa Trip 2026" />
+      </div>
+      <div class="modal-actions">
+        <button id="btn-create-group-confirm" class="btn btn-primary">Create</button>
+        <button class="btn btn-ghost modal-close">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Join Group Modal -->
+  <div id="modal-join-group" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>Join Group</h3>
+      <div class="form-group">
+        <label>Invite Code</label>
+        <input type="text" id="join-invite-code" placeholder="e.g. ABC123" maxlength="6" style="text-transform:uppercase" />
+      </div>
+      <div class="modal-actions">
+        <button id="btn-join-group-confirm" class="btn btn-primary">Join</button>
+        <button class="btn btn-ghost modal-close">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Expense Modal -->
+  <div id="modal-add-expense" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>Add Expense</h3>
+      <div class="form-group">
+        <label>Description</label>
+        <input type="text" id="exp-desc" placeholder="e.g. Lunch at Cafe" />
+      </div>
+      <div class="form-group">
+        <label>Total Amount (₹)</label>
+        <input type="number" id="exp-amount" placeholder="0.00" min="1" step="0.01" />
+      </div>
+      <div class="form-group">
+        <label>Paid By</label>
+        <select id="exp-payer"></select>
+      </div>
+      <div class="form-group">
+        <label>Split Among</label>
+        <div id="exp-members-checkboxes" class="members-checks"></div>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-add-expense-confirm" class="btn btn-primary">Add Expense</button>
+        <button class="btn btn-ghost modal-close">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settle Confirmation Modal -->
+  <div id="modal-settle" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>💸 Confirm Settlement</h3>
+      <div id="settle-details" class="settle-details">
+        <p id="settle-msg"></p>
+      </div>
+      <div class="modal-actions">
+        <button id="btn-settle-confirm" class="btn btn-primary">Mark as Settled</button>
+        <button class="btn btn-ghost modal-close">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://unpkg.com/dexie@3/dist/dexie.js"></script>
+  <script src="/js/db.js"></script>
+  <script src="/js/auth.js"></script>
+  <script src="/js/sync.js"></script>
+  <script src="/js/ui.js"></script>
+  <script src="/js/app.js"></script>
+
+</body>
+</html>
