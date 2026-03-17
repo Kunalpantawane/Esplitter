@@ -2,6 +2,28 @@
 
 const UI = (() => {
 
+    // ---- Balance cache ----
+    let _balanceCache = {};  // { groupId: { net, debts, timestamp } }
+    const CACHE_TTL = 30000; // 30 seconds
+
+    function _getCachedDebts(groupId, transactions, members) {
+        const cached = _balanceCache[groupId];
+        if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+            return cached;
+        }
+        const result = _computeDebts(transactions, members);
+        _balanceCache[groupId] = { ...result, timestamp: Date.now() };
+        return result;
+    }
+
+    function invalidateBalanceCache(groupId) {
+        if (groupId) {
+            delete _balanceCache[groupId];
+        } else {
+            _balanceCache = {};
+        }
+    }
+
     function showScreen(id) {
         document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
         document.getElementById(id).classList.add('active');
@@ -25,6 +47,48 @@ const UI = (() => {
         if (online) setTimeout(() => banner.classList.add('hidden'), 3000);
     }
 
+    // ---- Skeleton Loaders ----
+    function renderGroupSkeletons(containerId = 'groups-list', count = 3) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+        
+        let html = '';
+        for (let i = 0; i < count; i++) {
+            html += `
+                <div class="skeleton-card">
+                    <div class="skeleton skeleton-avatar"></div>
+                    <div class="skeleton-card-content">
+                        <div class="skeleton skeleton-text"></div>
+                        <div class="skeleton skeleton-text short"></div>
+                    </div>
+                </div>
+            `;
+        }
+        container.innerHTML = html;
+    }
+
+    function renderExpenseSkeletons(containerId = 'expense-list', count = 4) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        let html = '';
+        for (let i = 0; i < count; i++) {
+            html += `
+                <div class="expense-item" style="pointer-events: none;">
+                    <div class="expense-icon skeleton" style="border-radius: 50%; opacity: 0.5;"></div>
+                    <div class="expense-details">
+                        <div class="skeleton skeleton-text" style="margin-bottom: 4px;"></div>
+                        <div class="skeleton skeleton-text short"></div>
+                    </div>
+                    <div class="expense-right" style="display:flex; justify-content:flex-end;">
+                        <div class="skeleton skeleton-text" style="width: 40px; margin:0;"></div>
+                    </div>
+                </div>
+            `;
+        }
+        container.innerHTML = html;
+    }
+
     function renderGroups(groups, onGroupClick) {
         const list = document.getElementById('groups-list');
         if (!groups || groups.length === 0) {
@@ -35,14 +99,18 @@ const UI = (() => {
             return;
         }
         list.innerHTML = groups
-            .map((g) => `
+            .map((g) => {
+                const activity = g.lastActivityAt ? _timeAgo(new Date(g.lastActivityAt)) : '';
+                return `
         <div class="group-card" data-id="${g.id || g._id}">
           <div>
             <div class="group-card-name">${escapeHtml(g.name)}</div>
             <div class="group-card-meta">${(g.members || []).length} member(s) · Code: <strong>${g.inviteCode || '—'}</strong></div>
+            ${activity ? `<div class="group-card-activity">${activity}</div>` : ''}
           </div>
           <span class="group-card-arrow">›</span>
-        </div>`)
+        </div>`;
+            })
             .join('');
 
         list.querySelectorAll('.group-card').forEach((card) => {
@@ -50,17 +118,36 @@ const UI = (() => {
         });
     }
 
+    function _timeAgo(date) {
+        const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+        if (seconds < 60) return 'Just now';
+        const minutes = Math.floor(seconds / 60);
+        if (minutes < 60) return `${minutes}m ago`;
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) return `${hours}h ago`;
+        const days = Math.floor(hours / 24);
+        if (days < 30) return `${days}d ago`;
+        return date.toLocaleDateString();
+    }
+
     async function renderGroupDetail(group, session) {
         document.getElementById('group-title').textContent = group.name;
         document.getElementById('invite-code-display').textContent = `Code: ${group.inviteCode}`;
 
+        // Show skeletons before fetching transactions
+        renderExpenseSkeletons('expense-list', 5);
+
         const transactions = await Sync.getGroupTransactions(group.id || group._id);
         const members = group.members || [];
         const myId = session.user.id;
+        const groupId = group.id || String(group._id);
 
-        _renderBalances(transactions, members);
-        _renderSettlement(transactions, members, myId, group);
-        _renderExpenses(transactions, members);
+        // Use cached balances
+        const { net, debts } = _getCachedDebts(groupId, transactions, members);
+
+        _renderBalances(transactions, members, net, debts);
+        _renderSettlement(transactions, members, myId, group, debts);
+        _renderExpenses(transactions, members, session, group);
     }
 
     // ---- Pairwise balance computation ----
@@ -122,9 +209,8 @@ const UI = (() => {
         return m ? (m.name || 'Member') : 'Someone';
     }
 
-    function _renderBalances(transactions, members) {
+    function _renderBalances(transactions, members, net, debts) {
         const container = document.getElementById('balance-summary');
-        const { net, debts } = _computeDebts(transactions, members);
 
         // Total group spending
         const totalSpending = transactions
@@ -178,9 +264,8 @@ const UI = (() => {
     }
 
     // ---- Settlement section ----
-    function _renderSettlement(transactions, members, myId, group) {
+    function _renderSettlement(transactions, members, myId, group, debts) {
         const container = document.getElementById('settlement-section');
-        const { debts } = _computeDebts(transactions, members);
         const groupId = group.id || String(group._id);
 
         // Filter debts involving current user
@@ -197,6 +282,9 @@ const UI = (() => {
         if (myDebts.length > 0) {
             html += myDebts.map(d => {
                 const toName = _getMemberName(members, d.to);
+                const toMember = members.find(m => (m.id || String(m._id)) === d.to);
+                const toUpi = toMember ? toMember.upiId : '';
+                
                 return `<div class="settle-card settle-owe">
                     <div class="settle-info">
                         <span class="settle-label">You owe</span>
@@ -207,8 +295,9 @@ const UI = (() => {
                         <button class="btn btn-primary btn-xs btn-settle"
                             data-group="${groupId}"
                             data-to="${d.to}" data-to-name="${escapeHtml(toName)}"
-                            data-amt="${d.amount.toFixed(2)}">
-                            Mark Settled
+                            data-amt="${d.amount.toFixed(2)}"
+                            data-upi="${escapeHtml(toUpi || '')}">
+                            ${toUpi ? 'Pay via UPI' : 'Mark Settled'}
                         </button>
                     </div>
                 </div>`;
@@ -231,7 +320,7 @@ const UI = (() => {
         container.innerHTML = html;
     }
 
-    function _renderExpenses(transactions, members) {
+    function _renderExpenses(transactions, members, session, group) {
         const list = document.getElementById('expense-list');
         if (!transactions.length) {
             list.innerHTML = `<div class="empty-state">
@@ -241,25 +330,94 @@ const UI = (() => {
             return;
         }
 
+        const myId = session.user.id;
+        const isAdmin = String(group.adminId) === myId;
+
         list.innerHTML = transactions
             .map((tx) => {
                 const payerName = _getMemberName(members, tx.paidBy);
                 const icon = (tx.type === 'PAYMENT') ? '💸' : '💰';
                 const typeLabel = (tx.type === 'PAYMENT') ? 'Settlement' : 'Expense';
                 const amtClass = (tx.type === 'PAYMENT') ? 'settlement' : '';
+                const txId = tx._id || tx.clientId;
+                const date = tx.createdAt ? new Date(tx.createdAt).toLocaleDateString() : '';
 
                 return `
-        <div class="expense-card ${amtClass}">
+        <div class="expense-card clickable ${amtClass}" data-tx-id="${txId}" data-client-id="${tx.clientId}">
           <div class="expense-icon">${icon}</div>
           <div class="expense-info">
             <div class="expense-desc">${escapeHtml(tx.description)}</div>
-            <div class="expense-meta">Paid by ${escapeHtml(payerName)} · split ${(tx.splits || []).length} ways · ${typeLabel}</div>
+            <div class="expense-meta">Paid by ${escapeHtml(payerName)} · split ${(tx.splits || []).length} ways · ${typeLabel}${date ? ' · ' + date : ''}</div>
             ${tx.syncStatus === 'PENDING' ? '<span class="expense-unsynced">⏳ PENDING SYNC</span>' : ''}
           </div>
           <div class="expense-amount">${(tx.type === 'PAYMENT') ? '-' : ''}₹${Number(tx.amount).toFixed(2)}</div>
         </div>`;
             })
             .join('');
+
+        // Add click listeners for expense detail
+        list.querySelectorAll('.expense-card.clickable').forEach(card => {
+            card.addEventListener('click', () => {
+                const clientId = card.dataset.clientId;
+                const tx = transactions.find(t => t.clientId === clientId);
+                if (tx) {
+                    _showExpenseDetail(tx, members, isAdmin, myId);
+                }
+            });
+        });
+    }
+
+    function _showExpenseDetail(tx, members, isAdmin, myId) {
+        const type = tx.type || 'EXPENSE';
+        const isPayment = type === 'PAYMENT';
+        const isCreator = String(tx.paidBy) === myId;
+
+        // Header
+        document.getElementById('detail-title').textContent = isPayment ? 'Settlement Details' : 'Expense Details';
+        const badge = document.getElementById('detail-type-badge');
+        badge.textContent = isPayment ? 'Payment' : 'Expense';
+        badge.className = `type-badge ${isPayment ? 'payment' : 'expense'}`;
+
+        // Body
+        document.getElementById('detail-amount').textContent = `₹${Number(tx.amount).toFixed(2)}`;
+        document.getElementById('detail-desc').textContent = tx.description;
+        document.getElementById('detail-payer').textContent = _getMemberName(members, tx.paidBy);
+        document.getElementById('detail-split-type').textContent = tx.splitType || 'Equal';
+
+        const dateStr = tx.createdAt
+            ? new Date(tx.createdAt).toLocaleDateString('en-IN', {
+                year: 'numeric', month: 'short', day: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            })
+            : '—';
+        document.getElementById('detail-date').textContent = dateStr;
+
+        // Sync status
+        const syncStatus = tx.syncStatus || 'SYNCED';
+        const syncEl = document.getElementById('detail-sync-status');
+        syncEl.innerHTML = `<span class="detail-sync-badge ${syncStatus === 'SYNCED' ? 'synced' : 'pending'}">${syncStatus}</span>`;
+
+        // Split breakdown
+        const splitsList = document.getElementById('detail-splits-list');
+        splitsList.innerHTML = (tx.splits || []).map(s => {
+            const name = _getMemberName(members, s.userId);
+            return `<div class="detail-split-row">
+                <span class="detail-split-name">${escapeHtml(name)}</span>
+                <span class="detail-split-amount">₹${Number(s.amount).toFixed(2)}</span>
+            </div>`;
+        }).join('');
+
+        // Delete button
+        const deleteBtn = document.getElementById('btn-delete-expense');
+        if (isAdmin || isCreator) {
+            deleteBtn.classList.remove('hidden');
+            deleteBtn.dataset.clientId = tx.clientId;
+            deleteBtn.dataset.txId = tx._id || '';
+        } else {
+            deleteBtn.classList.add('hidden');
+        }
+
+        showModal('modal-expense-detail');
     }
 
     function populateExpenseForm(group, session) {
@@ -286,19 +444,131 @@ const UI = (() => {
         </label>`;
             })
             .join('');
+
+        // Populate custom split inputs
+        _populateSplitInputs('exp-custom-inputs', members, '₹');
+        _populateSplitInputs('exp-percentage-inputs', members, '%');
+
+        // Reset split type to Equal
+        document.querySelectorAll('.split-tab').forEach(t => t.classList.remove('active'));
+        document.querySelector('.split-tab[data-split="EQUAL"]').classList.add('active');
+        document.getElementById('exp-participants-section').classList.remove('hidden');
+        document.getElementById('exp-custom-section').classList.add('hidden');
+        document.getElementById('exp-percentage-section').classList.add('hidden');
+        document.getElementById('exp-split-preview').innerHTML = '';
+        document.getElementById('exp-custom-total').innerHTML = '';
+        document.getElementById('exp-percentage-total').innerHTML = '';
     }
 
-    async function updateSyncIndicator() {
-        const count = await db.transactions.where('syncStatus').equals('PENDING').count();
-        const synci = document.getElementById('sync-indicator');
-        const badge = document.getElementById('sync-count');
-        if (count > 0) {
-            badge.textContent = `${count} pending`;
-            synci.style.display = 'flex';
-        } else {
-            badge.textContent = '';
-            synci.style.display = 'none';
+    function _populateSplitInputs(containerId, members, suffix) {
+        const container = document.getElementById(containerId);
+        container.innerHTML = members.map(m => {
+            const id = String(m._id || m.id || m);
+            const name = m.name || 'Member';
+            return `<div class="split-input-row">
+                <span class="split-name">${escapeHtml(name)}</span>
+                <input type="number" class="split-val" data-user="${id}" placeholder="0" min="0" step="0.01" />
+                <span class="split-suffix">${suffix}</span>
+            </div>`;
+        }).join('');
+    }
+
+    function renderSplitPreview(splits, members) {
+        const preview = document.getElementById('exp-split-preview');
+        if (!splits || splits.length === 0) {
+            preview.innerHTML = '';
+            return;
         }
+
+        let html = `<div class="split-preview-title">Split Preview</div>`;
+        html += splits.map(s => {
+            const name = _getMemberName(members, s.userId);
+            return `<div class="split-preview-row">
+                <span class="preview-name">${escapeHtml(name)}</span>
+                <span class="preview-amount">₹${Number(s.amount).toFixed(2)}</span>
+            </div>`;
+        }).join('');
+        preview.innerHTML = html;
+    }
+
+    function updateSplitTotal(containerId, totalAmount, isPercentage) {
+        const container = document.getElementById(containerId);
+        const inputs = container.parentElement.querySelectorAll('.split-val');
+        let sum = 0;
+        inputs.forEach(inp => { sum += parseFloat(inp.value) || 0; });
+
+        const target = isPercentage ? 100 : totalAmount;
+        const suffix = isPercentage ? '%' : '';
+        const isValid = Math.abs(sum - target) <= 0.02;
+
+        const totalEl = container;
+        totalEl.className = `split-total ${isValid ? 'valid' : 'invalid'}`;
+        totalEl.innerHTML = `<span>Total: ${sum.toFixed(2)}${suffix}</span>
+            <span>Target: ${target.toFixed(2)}${suffix}</span>`;
+    }
+
+    async function updateSyncIndicator(status = 'idle', data = {}) {
+        const syncInd = document.getElementById('sync-indicator');
+        const content = document.getElementById('sync-status-content');
+        if (!syncInd || !content) return;
+
+        let pendingCount = 0;
+        let failedCount = 0;
+        if (window.Sync) {
+            pendingCount = await window.Sync.getPendingCount();
+            failedCount = await window.Sync.getFailedCount();
+        }
+
+        const btnSync = document.getElementById('btn-manual-sync');
+        
+        // Hide if nothing to do and not currently syncing/showing success
+        if (status === 'idle' && pendingCount === 0 && failedCount === 0) {
+            syncInd.classList.add('hidden');
+            return;
+        }
+
+        syncInd.classList.remove('hidden');
+        let html = '';
+
+        if (status === 'syncing') {
+            html = `<div class="sync-status-main">
+                        <span class="sync-spinner"></span> Syncing...
+                    </div>
+                    <div class="sync-status-sub">Please wait</div>`;
+            btnSync.style.display = 'none';
+        } else if (status === 'success') {
+            html = `<div class="sync-status-main sync-success">
+                        ✅ Sync Complete
+                    </div>
+                    <div class="sync-status-sub">${data.synced || 0} sent, ${data.pulled || 0} received</div>`;
+            btnSync.style.display = 'none';
+            // Auto hide success after 3 seconds if no new pending items
+            setTimeout(() => updateSyncIndicator('idle'), 3000);
+        } else if (status === 'error' || failedCount > 0) {
+            html = `<div class="sync-status-main sync-error">
+                        ⚠️ Sync Failed
+                    </div>
+                    <div class="sync-status-sub">${failedCount} item(s) failed. ${data.error ? escapeHtml(data.error) : 'Will retry.'}</div>`;
+            btnSync.textContent = 'Retry';
+            btnSync.style.display = 'block';
+            // Need to update the click handler in app.js for retry
+        } else {
+            // Idle but has pending
+            const lastSync = window.Sync ? window.Sync.getLastSyncTime() : null;
+            let timeStr = 'Never';
+            if (lastSync) {
+                const diffMin = Math.round((Date.now() - new Date(lastSync).getTime()) / 60000);
+                timeStr = diffMin === 0 ? 'Just now' : `${diffMin}m ago`;
+            }
+            html = `<div class="sync-status-main sync-count">
+                        ⬆️ ${pendingCount} pending
+                    </div>
+                    <div class="sync-status-sub">Last synced: ${timeStr}</div>`;
+            btnSync.textContent = 'Sync Now';
+            btnSync.style.display = 'block';
+        }
+
+        content.innerHTML = html;
     }
 
     function escapeHtml(str) {
@@ -310,7 +580,10 @@ const UI = (() => {
 
     return {
         showScreen, showModal, hideModal, setNetworkBanner,
-        renderGroups, renderGroupDetail, populateExpenseForm, updateSyncIndicator, escapeHtml,
+        renderGroups, renderGroupDetail, populateExpenseForm,
+        updateSyncIndicator, escapeHtml,
+        renderSplitPreview, updateSplitTotal, invalidateBalanceCache,
+        renderGroupSkeletons, renderExpenseSkeletons
     };
 })();
 

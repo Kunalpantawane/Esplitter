@@ -33,7 +33,10 @@ router.post('/', async (req, res) => {
                         description: tx.description,
                         amount: tx.amount,
                         paidBy: tx.paidBy,
+                        receiverId: tx.receiverId || undefined,
                         splits: tx.splits,
+                        splitType: tx.splitType || 'EQUAL',
+                        type: tx.type || 'EXPENSE',
                         syncedAt: new Date(),
                     },
                     { upsert: true, new: true }
@@ -48,7 +51,9 @@ router.post('/', async (req, res) => {
         }
 
         // Pull new transactions since lastSyncAt for all user's groups
-        const userGroups = await Group.find({ members: req.userId }).select('_id');
+        const userGroups = await Group.find({ members: req.userId })
+            .populate('members', 'name email upiId')
+            .lean();
         const groupIds = userGroups.map((g) => g._id);
 
         const since = lastSyncAt ? new Date(lastSyncAt) : new Date(0);
@@ -57,10 +62,21 @@ router.post('/', async (req, res) => {
             syncedAt: { $gt: since },
         }).lean();
 
+        // Return groups data too so client can refresh in one round-trip
+        const serverGroups = userGroups.map(g => ({
+            _id: g._id,
+            name: g.name,
+            inviteCode: g.inviteCode,
+            adminId: g.adminId,
+            members: g.members,
+            lastActivityAt: g.lastActivityAt,
+        }));
+
         res.json({
             synced: results,
             errors,
             serverAdds,
+            serverGroups,
             syncTime: new Date().toISOString(),
         });
     } catch (err) {

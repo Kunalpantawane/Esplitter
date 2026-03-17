@@ -6,7 +6,7 @@ const Transaction = require('../models/Transaction');
 const router = express.Router();
 router.use(authenticate);
 
-// GET /api/expenses/:groupId - Get all expenses for a group
+// GET /api/expenses/:groupId - Get expenses for a group (paginated + search/filter)
 router.get('/:groupId', async (req, res) => {
     try {
         const group = await Group.findById(req.params.groupId);
@@ -15,20 +15,97 @@ router.get('/:groupId', async (req, res) => {
             return res.status(403).json({ error: 'You are not a member of this group.' });
         }
 
-        const transactions = await Transaction.find({ groupId: req.params.groupId })
-            .sort({ syncedAt: -1 })
-            .lean();
+        // Pagination
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+        const skip = (page - 1) * limit;
 
-        res.json({ transactions });
+        // Build filter query
+        const filter = { groupId: req.params.groupId };
+
+        // Search by description
+        if (req.query.search) {
+            filter.description = { $regex: req.query.search, $options: 'i' };
+        }
+
+        // Filter by payer
+        if (req.query.payerId) {
+            filter.paidBy = req.query.payerId;
+        }
+
+        // Filter by type
+        if (req.query.type && ['EXPENSE', 'PAYMENT'].includes(req.query.type)) {
+            filter.type = req.query.type;
+        }
+
+        // Filter by amount range
+        if (req.query.minAmount || req.query.maxAmount) {
+            filter.amount = {};
+            if (req.query.minAmount) filter.amount.$gte = parseFloat(req.query.minAmount);
+            if (req.query.maxAmount) filter.amount.$lte = parseFloat(req.query.maxAmount);
+        }
+
+        // Filter by date range
+        if (req.query.startDate || req.query.endDate) {
+            filter.createdAt = {};
+            if (req.query.startDate) filter.createdAt.$gte = new Date(req.query.startDate);
+            if (req.query.endDate) filter.createdAt.$lte = new Date(req.query.endDate);
+        }
+
+        const [transactions, total] = await Promise.all([
+            Transaction.find(filter)
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean(),
+            Transaction.countDocuments(filter),
+        ]);
+
+        res.json({
+            transactions,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+                hasMore: page * limit < total,
+            },
+        });
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch expenses.' });
+    }
+});
+
+// GET /api/expenses/detail/:id - Get a single expense with full details
+router.get('/detail/:id', async (req, res) => {
+    try {
+        const transaction = await Transaction.findById(req.params.id)
+            .populate('paidBy', 'name email')
+            .populate('splits.userId', 'name email')
+            .populate('receiverId', 'name email')
+            .lean();
+
+        if (!transaction) return res.status(404).json({ error: 'Expense not found.' });
+
+        // Check group membership
+        const group = await Group.findById(transaction.groupId);
+        if (!group || !group.members.map(String).includes(String(req.userId))) {
+            return res.status(403).json({ error: 'You are not a member of this group.' });
+        }
+
+        const isAdmin = String(group.adminId) === String(req.userId);
+        const isCreator = String(transaction.paidBy._id || transaction.paidBy) === String(req.userId);
+
+        res.json({ transaction, canDelete: isAdmin || isCreator });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch expense detail.' });
     }
 });
 
 // POST /api/expenses - Add a new expense (with validation)
 router.post('/', async (req, res) => {
     try {
-        const { groupId, description, amount, paidBy, splits, clientId, type } = req.body;
+        const { groupId, description, amount, paidBy, splits, clientId, type, splitType, receiverId } = req.body;
 
         // Validate required fields
         if (!groupId || !description || !amount || !paidBy || !splits) {
@@ -81,7 +158,9 @@ router.post('/', async (req, res) => {
             description,
             amount,
             paidBy,
+            receiverId: receiverId || undefined,
             splits,
+            splitType: splitType || 'EQUAL',
             type: type || 'EXPENSE',
             syncedAt: new Date(),
         });
@@ -92,6 +171,38 @@ router.post('/', async (req, res) => {
         res.status(201).json({ transaction });
     } catch (err) {
         res.status(500).json({ error: 'Failed to add expense.' });
+    }
+});
+
+// PUT /api/expenses/:id - Update expense metadata (description only, admin/creator only)
+router.put('/:id', async (req, res) => {
+    try {
+        const transaction = await Transaction.findById(req.params.id);
+        if (!transaction) return res.status(404).json({ error: 'Expense not found.' });
+
+        const group = await Group.findById(transaction.groupId);
+        if (!group) return res.status(404).json({ error: 'Group not found.' });
+
+        const isAdmin = String(group.adminId) === String(req.userId);
+        const isCreator = String(transaction.paidBy) === String(req.userId);
+        if (!isAdmin && !isCreator) {
+            return res.status(403).json({ error: 'Only admin or creator can update.' });
+        }
+
+        // Only allow updating description (amounts/splits are immutable)
+        const { description } = req.body;
+        if (!description || !description.trim()) {
+            return res.status(400).json({ error: 'Description is required.' });
+        }
+
+        transaction.description = description.trim();
+        await transaction.save();
+
+        await Group.findByIdAndUpdate(transaction.groupId, { lastActivityAt: new Date() });
+
+        res.json({ transaction });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to update expense.' });
     }
 });
 

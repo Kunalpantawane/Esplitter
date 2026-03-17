@@ -11,5 +11,12 @@ db.version(1).stores({
     transactions: 'clientId, groupId, syncStatus, createdAt',
 });
 
+// v2: Add retryCount + lastError for sync retry tracking
+db.version(2).stores({
+    session: 'id',
+    groups: 'id, name, inviteCode',
+    transactions: 'clientId, groupId, syncStatus, createdAt, retryCount',
+});
+
 // Expose globally
 window.db = db;

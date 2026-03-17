@@ -1,0 +1,295 @@
+ // qrpay.js — QR Scanner + UPI Payment Gateway
+// Esplitter acts as a gateway: scan QR → enter amount/note → pay via UPI apps → track payment
+
+const QRPay = (() => {
+    let html5QrCode = null;
+    let scannedData = null; // { upiId, name, amount, note }
+
+    // ---- Parse UPI QR string ----
+    function parseUPI(text) {
+        // Format: upi://pay?pa=user@upi&pn=Name&am=100.00&tn=Note&cu=INR
+        const result = { upiId: '', name: '', amount: '', note: '' };
+        try {
+            let raw = text.trim();
+            // Some QR codes use uppercase UPI://
+            if (raw.toLowerCase().startsWith('upi://pay')) {
+                const url = new URL(raw.replace(/^upi:\/\//i, 'https://upi.placeholder/'));
+                result.upiId = url.searchParams.get('pa') || '';
+                result.name = url.searchParams.get('pn') || '';
+                result.amount = url.searchParams.get('am') || '';
+                result.note = url.searchParams.get('tn') || '';
+            } else if (raw.includes('@')) {
+                // Plain UPI ID pasted
+                result.upiId = raw;
+            }
+        } catch (e) {
+            console.warn('QRPay: Could not parse UPI string', e);
+        }
+        return result;
+    }
+
+    // ---- Build UPI deep link ----
+    function buildUPILink({ upiId, name, amount, note }) {
+        const params = new URLSearchParams();
+        params.set('pa', upiId);
+        if (name) params.set('pn', name);
+        if (amount) params.set('am', parseFloat(amount).toFixed(2));
+        if (note) params.set('tn', note);
+        params.set('cu', 'INR');
+        return `upi://pay?${params.toString()}`;
+    }
+
+    // ---- Start Scanner ----
+    async function startScanner() {
+        scannedData = null;
+        const modal = document.getElementById('modal-qr-scanner');
+        modal.classList.remove('hidden');
+
+        const readerEl = document.getElementById('qr-reader');
+        readerEl.innerHTML = '';
+        document.getElementById('qr-status').textContent = 'Point camera at a UPI QR code…';
+        document.getElementById('qr-status').className = 'qr-status scanning';
+
+        try {
+            html5QrCode = new Html5Qrcode('qr-reader');
+            await html5QrCode.start(
+                { facingMode: 'environment' },
+                { fps: 10, qrbox: { width: 250, height: 250 } },
+                onScanSuccess,
+                () => { } // ignore scan failures (continuous)
+            );
+        } catch (err) {
+            console.error('QRPay: Camera error', err);
+            const statusEl = document.getElementById('qr-status');
+            statusEl.className = 'qr-status error';
+            
+            // Map specific error types
+            if (err.name === 'NotAllowedError' || err.message?.includes('Permission')) {
+                statusEl.textContent = '❌ Camera permission denied. Please allow access or upload an image.';
+            } else if (err.name === 'NotFoundError' || err.message?.includes('device not found')) {
+                statusEl.textContent = '❌ No camera found on this device. You can upload an image instead.';
+            } else if (err.name === 'NotReadableError' || err.message?.includes('already in use')) {
+                statusEl.textContent = '❌ Camera is already in use by another application. Please upload an image.';
+            } else {
+                statusEl.textContent = '❌ Camera not available. Try uploading an image instead.';
+            }
+        }
+    }
+
+    // ---- File Upload Fallback ----
+    async function handleFileUpload(event) {
+        if (!event.target.files || event.target.files.length === 0) return;
+        
+        const file = event.target.files[0];
+        const statusEl = document.getElementById('qr-status');
+        
+        statusEl.textContent = '⏳ Scanning image...';
+        statusEl.className = 'qr-status scanning';
+
+        try {
+            if (!html5QrCode) {
+                html5QrCode = new Html5Qrcode('qr-reader');
+            }
+            // scanFile(file, showImage)
+            const decodedText = await html5QrCode.scanFile(file, true);
+            await onScanSuccess(decodedText);
+        } catch (err) {
+            console.warn('QRPay: File scan failed', err);
+            statusEl.textContent = '⚠️ Could not find a valid UPI QR code in the image. Try another.';
+            statusEl.className = 'qr-status error';
+        }
+        
+        // Reset input so the same file could be selected again if needed
+        event.target.value = '';
+    }
+
+    // ---- Scan Success ----
+    async function onScanSuccess(decodedText) {
+        // Stop scanning immediately
+        try { await html5QrCode.stop(); } catch (_) { }
+
+        const parsed = parseUPI(decodedText);
+        if (!parsed.upiId) {
+            document.getElementById('qr-status').textContent =
+                '⚠️ Not a valid UPI QR code. Try again.';
+            document.getElementById('qr-status').className = 'qr-status error';
+            // Restart scanner after 2 seconds
+            setTimeout(() => startScanner(), 2000);
+            return;
+        }
+
+        scannedData = parsed;
+
+        // Close scanner → open payment form
+        document.getElementById('modal-qr-scanner').classList.add('hidden');
+        showPaymentForm(parsed);
+    }
+
+    // ---- Stop Scanner ----
+    async function stopScanner() {
+        try {
+            if (html5QrCode) await html5QrCode.stop();
+        } catch (_) { }
+        document.getElementById('modal-qr-scanner').classList.add('hidden');
+    }
+
+    // ---- Show Payment Form ----
+    function showPaymentForm(data) {
+        document.getElementById('pay-upi-id').textContent = data.upiId;
+        document.getElementById('pay-name').textContent = data.name || 'Unknown';
+
+        const amtInput = document.getElementById('pay-amount');
+        amtInput.value = data.amount || '';
+
+        const noteInput = document.getElementById('pay-note');
+        noteInput.value = data.note || '';
+
+        // Check if desktop to show QR fallback instead of intent buttons
+        const isDesktop = window.innerWidth > 768;
+        if (isDesktop) {
+            document.getElementById('pay-mobile-upi-section').classList.add('hidden');
+            document.getElementById('pay-desktop-qr-container').classList.remove('hidden');
+        } else {
+            document.getElementById('pay-mobile-upi-section').classList.remove('hidden');
+            document.getElementById('pay-desktop-qr-container').classList.add('hidden');
+        }
+
+        document.getElementById('modal-qr-payment').classList.remove('hidden');
+        
+        // Force render
+        renderAppButtons();
+    }
+
+    // ---- Generate UPI app buttons with deep links ----
+    function getPaymentLinks(upiId, amount, note, recipientName) {
+        const link = buildUPILink({ upiId, name: recipientName, amount, note });
+
+        // Different apps use the same upi:// scheme but some support intent:// on Android
+        return [
+            { name: 'Any UPI App', icon: '📱', url: link, cls: 'upi-generic' },
+            { name: 'Google Pay', icon: '🟢', url: link, cls: 'upi-gpay' },
+            { name: 'PhonePe', icon: '🟣', url: link, cls: 'upi-phonepe' },
+            { name: 'Paytm', icon: '🔵', url: link, cls: 'upi-paytm' },
+        ];
+    }
+
+    // ---- Open UPI App ----
+    function openUPIApp(url) {
+        // On mobile, window.location with upi:// opens the OS UPI intent picker
+        // On desktop, this won't work — we show a fallback
+        const link = document.createElement('a');
+        link.href = url;
+        link.click();
+    }
+
+    // ---- Render UPI App Buttons & Desktop QR ----
+    function renderAppButtons() {
+        const amount = parseFloat(document.getElementById('pay-amount').value) || 0;
+        const note = document.getElementById('pay-note').value.trim();
+        const upiId = scannedData?.upiId || '';
+        const name = scannedData?.name || '';
+
+        if (!upiId || amount <= 0) return;
+
+        const apps = getPaymentLinks(upiId, amount, note, name);
+        
+        // Render mobile buttons
+        const container = document.getElementById('upi-app-grid');
+        container.innerHTML = apps.map(app => `
+            <button class="upi-app-btn ${app.cls}" data-url="${app.url}">
+                <span class="upi-app-icon">${app.icon}</span>
+                <span class="upi-app-name">${app.name}</span>
+            </button>
+        `).join('');
+
+        // Render desktop QR
+        if (window.innerWidth > 768 && typeof QRCode !== 'undefined') {
+            const canvas = document.getElementById('pay-desktop-qr');
+            const deepLink = buildUPILink({ upiId, name, amount, note });
+            QRCode.toCanvas(canvas, deepLink, {
+                width: 200,
+                margin: 2,
+                color: { dark: '#000000', light: '#ffffff' }
+            }, (error) => {
+                if (error) console.error('QR Generate Error:', error);
+            });
+        }
+    }
+
+    // ---- Copy UPI Link ----
+    function copyUPILink() {
+        const amount = parseFloat(document.getElementById('pay-amount').value) || 0;
+        const note = document.getElementById('pay-note').value.trim();
+        const upiId = scannedData?.upiId || '';
+        const name = scannedData?.name || '';
+        const link = buildUPILink({ upiId, name, amount, note });
+
+        navigator.clipboard.writeText(link).then(() => {
+            const btn = document.getElementById('btn-copy-upi');
+            btn.textContent = '✅ Copied!';
+            setTimeout(() => { btn.textContent = '📋 Copy UPI Link'; }, 2000);
+        }).catch(() => {
+            prompt('Copy this UPI link:', link);
+        });
+    }
+
+    // ---- Record Payment ----
+    async function recordPayment(groupId) {
+        if (!scannedData) return;
+        const amount = parseFloat(document.getElementById('pay-amount').value) || 0;
+        const note = document.getElementById('pay-note').value.trim() || 'QR Payment';
+
+        if (amount <= 0) {
+            alert('Please enter a valid amount');
+            return;
+        }
+
+        try {
+            const session = await Auth.getSession();
+            
+            // Check if this is a group settlement context
+            if (scannedData.settleContext && typeof Sync !== 'undefined' && Sync.settleDebt) {
+                await Sync.settleDebt({
+                    groupId: scannedData.settleContext.groupId,
+                    fromUserId: session.user.id,
+                    toUserId: scannedData.settleContext.toUserId,
+                    toUserName: scannedData.name || scannedData.upiId,
+                    amount: amount,
+                    // Note is ignored by the raw settleDebt command usually, 
+                    // but we can pass it if we want to expand it later.
+                });
+            } else if (groupId && typeof Sync !== 'undefined') {
+                // Ad-hoc PAYMENT string if just a loose QR scan in a group view
+                await Sync.addExpense({
+                    groupId: groupId,
+                    description: `💸 QR Pay to ${scannedData.name || scannedData.upiId} – ${note}`,
+                    amount: amount,
+                    paidBy: session.user.id,
+                    splits: [{ userId: session.user.id, amount: amount }],
+                    type: 'PAYMENT',
+                });
+            }
+        } catch (e) {
+            console.error('QRPay: Could not record payment', e);
+            alert('Failed to record payment: ' + e.message);
+        }
+        
+        document.getElementById('modal-qr-payment').classList.add('hidden');
+    }
+
+    // Public API
+    return {
+        startScanner,
+        stopScanner,
+        showPaymentForm,
+        renderAppButtons,
+        openUPIApp,
+        copyUPILink,
+        recordPayment,
+        parseUPI,
+        buildUPILink,
+        handleFileUpload,
+    };
+})();
+
+window.QRPay = QRPay;
