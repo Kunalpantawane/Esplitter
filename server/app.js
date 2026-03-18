@@ -23,20 +23,11 @@ app.use(helmet({
   contentSecurityPolicy: false, // Disable CSP for now (inline scripts used)
 }));
 
-// CORS — restrict origins
-const allowedOrigins = [
-  'http://localhost:3000',
-  process.env.FRONTEND_URL,
-].filter(Boolean);
-
+// CORS — dynamically allow origins for Vercel
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (same-origin, curl, mobile apps)
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
+    // Reflect the requesting origin back dynamically to support Vercel preview domains
+    callback(null, origin || true);
   },
   credentials: true, // Allow cookies
 }));
