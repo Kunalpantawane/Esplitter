@@ -29,14 +29,27 @@ const QRPay = (() => {
     }
 
     // ---- Build UPI deep link ----
+    // NOTE: We manually build the URL instead of using URLSearchParams because
+    // URLSearchParams and encodeURIComponent percent-encode the '@' character (to %40).
+    // UPI apps (PhonePe, GPay, Paytm) expect the raw '@' in the 'pa' parameter
+    // and will often fail or misparse the whole intent if it is encoded.
     function buildUPILink({ upiId, name, amount, note }) {
-        const params = new URLSearchParams();
-        params.set('pa', upiId);
-        if (name) params.set('pn', name);
-        if (amount) params.set('am', parseFloat(amount).toFixed(2));
-        if (note) params.set('tn', note);
-        params.set('cu', 'INR');
-        return `upi://pay?${params.toString()}`;
+        let url = `upi://pay?pa=${upiId}`;
+        if (name) url += `&pn=${encodeURIComponent(name)}`;
+        if (amount) {
+            // Some buggy UPI apps misread "1.00" as "100". Pass integers cleanly.
+            const num = parseFloat(amount);
+            const amStr = Number.isInteger(num) ? String(num) : num.toFixed(2);
+            url += `&am=${amStr}`;
+        }
+        if (note) url += `&tn=${encodeURIComponent(note)}`;
+        url += '&cu=INR';
+        return url;
+    }
+
+    // HTML-escape a string for safe embedding in HTML attributes
+    function escapeAttr(str) {
+        return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
     }
 
     // ---- Start Scanner ----
@@ -196,7 +209,7 @@ const QRPay = (() => {
         // Render mobile buttons
         const container = document.getElementById('upi-app-grid');
         container.innerHTML = apps.map(app => `
-            <button class="upi-app-btn ${app.cls}" data-url="${app.url}">
+            <button class="upi-app-btn ${app.cls}" data-url="${escapeAttr(app.url)}">
                 <span class="upi-app-icon">${app.icon}</span>
                 <span class="upi-app-name">${app.name}</span>
             </button>
@@ -240,7 +253,7 @@ const QRPay = (() => {
         const note = document.getElementById('pay-note').value.trim() || 'QR Payment';
 
         if (amount <= 0) {
-            alert('Please enter a valid amount');
+            UI.showToast('Please enter a valid amount', 'warning');
             return;
         }
 
@@ -271,7 +284,7 @@ const QRPay = (() => {
             }
         } catch (e) {
             console.error('QRPay: Could not record payment', e);
-            alert('Failed to record payment: ' + e.message);
+            UI.showToast('Failed to record payment: ' + e.message, 'error');
         }
         
         document.getElementById('modal-qr-payment').classList.add('hidden');

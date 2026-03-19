@@ -2,6 +2,46 @@
 
 const UI = (() => {
 
+    // ---- Toast Notifications ----
+    function showToast(message, type = 'info', duration = 3500) {
+        const container = document.getElementById('toast-container');
+        if (!container) return;
+
+        const icons = { success: '✅', error: '❌', info: 'ℹ️', warning: '⚠️' };
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.innerHTML = `
+            <span class="toast-icon">${icons[type] || icons.info}</span>
+            <span class="toast-message">${escapeHtml(message)}</span>
+        `;
+        container.appendChild(toast);
+
+        setTimeout(() => {
+            toast.classList.add('toast-exit');
+            setTimeout(() => toast.remove(), 300);
+        }, duration);
+    }
+
+    // ---- Button Ripple Effect ----
+    function addRipple(e) {
+        const btn = e.currentTarget;
+        const ripple = document.createElement('span');
+        ripple.className = 'ripple';
+        const rect = btn.getBoundingClientRect();
+        const size = Math.max(rect.width, rect.height);
+        ripple.style.width = ripple.style.height = size + 'px';
+        ripple.style.left = (e.clientX - rect.left - size / 2) + 'px';
+        ripple.style.top = (e.clientY - rect.top - size / 2) + 'px';
+        btn.appendChild(ripple);
+        setTimeout(() => ripple.remove(), 600);
+    }
+
+    // Attach ripple to all buttons
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn, .btn-primary, .btn-secondary');
+        if (btn) addRipple(e);
+    });
+
     // ---- Balance cache ----
     let _balanceCache = {};  // { groupId: { net, debts, timestamp } }
     const CACHE_TTL = 30000; // 30 seconds
@@ -93,8 +133,8 @@ const UI = (() => {
         const list = document.getElementById('groups-list');
         if (!groups || groups.length === 0) {
             list.innerHTML = `<div class="empty-state">
-                <div class="empty-icon">📂</div>
-                <p>No groups yet. Create or join one!</p>
+                <div class="empty-icon">🌟</div>
+                <p>Your journey starts here!<br>Create or join a group to begin splitting expenses.</p>
             </div>`;
             return;
         }
@@ -325,7 +365,7 @@ const UI = (() => {
         if (!transactions.length) {
             list.innerHTML = `<div class="empty-state">
                 <div class="empty-icon">🧾</div>
-                <p>No expenses yet. Add one!</p>
+                <p>No expenses yet — add your first one!</p>
             </div>`;
             return;
         }
@@ -581,7 +621,7 @@ const UI = (() => {
     return {
         showScreen, showModal, hideModal, setNetworkBanner,
         renderGroups, renderGroupDetail, populateExpenseForm,
-        updateSyncIndicator, escapeHtml,
+        updateSyncIndicator, escapeHtml, showToast,
         renderSplitPreview, updateSplitTotal, invalidateBalanceCache,
         renderGroupSkeletons, renderExpenseSkeletons
     };

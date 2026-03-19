@@ -17,6 +17,7 @@ const transactionSchema = new mongoose.Schema(
         splitType: { type: String, enum: ['EQUAL', 'CUSTOM', 'PERCENTAGE'], default: 'EQUAL' },
         type: { type: String, enum: ['EXPENSE', 'PAYMENT'], default: 'EXPENSE' },
         imageUrl: { type: String },
+        deleted: { type: Boolean, default: false },
         syncedAt: { type: Date, default: Date.now },
     },
     { timestamps: true }

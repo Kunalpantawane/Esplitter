@@ -137,6 +137,12 @@ const Sync = (() => {
 
             // ---- Merge server transactions ----
             for (const tx of (serverAdds || [])) {
+                // If it was deleted on the server, remove it locally
+                if (tx.deleted) {
+                    await db.transactions.delete(tx.clientId);
+                    continue;
+                }
+                
                 const existing = await db.transactions.get(tx.clientId);
                 if (!existing) {
                     await db.transactions.put({
@@ -151,6 +157,14 @@ const Sync = (() => {
                         splitType: tx.splitType || 'EQUAL',
                         syncStatus: 'SYNCED',
                         createdAt: tx.createdAt || new Date().toISOString(),
+                    });
+                } else if (existing.syncStatus === 'SYNCED') {
+                    // Update existing synced records in case details changed
+                    await db.transactions.update(tx.clientId, {
+                        description: tx.description,
+                        amount: tx.amount,
+                        splits: tx.splits,
+                        splitType: tx.splitType || 'EQUAL'
                     });
                 }
             }
@@ -344,15 +358,17 @@ const Sync = (() => {
         return expense;
     }
 
-    async function deleteExpense(clientId, serverId) {
+    async function deleteExpense(clientId) {
+        // Delete locally first
         await db.transactions.delete(clientId);
         UI.invalidateBalanceCache();
 
-        if (serverId && navigator.onLine) {
+        // Push deletion to server using unique clientId
+        if (navigator.onLine) {
             try {
                 const session = await Auth.getSession();
                 if (!session) return;
-                await fetch(`/api/expenses/${serverId}`, {
+                await fetch(`/api/expenses/client/${clientId}`, {
                     method: 'DELETE',
                     headers: Auth.authHeader(session.token),
                 });

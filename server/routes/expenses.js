@@ -21,7 +21,7 @@ router.get('/:groupId', async (req, res) => {
         const skip = (page - 1) * limit;
 
         // Build filter query
-        const filter = { groupId: req.params.groupId };
+        const filter = { groupId: req.params.groupId, deleted: { $ne: true } };
 
         // Search by description
         if (req.query.search) {
@@ -85,7 +85,7 @@ router.get('/detail/:id', async (req, res) => {
             .populate('receiverId', 'name email')
             .lean();
 
-        if (!transaction) return res.status(404).json({ error: 'Expense not found.' });
+        if (!transaction || transaction.deleted) return res.status(404).json({ error: 'Expense not found.' });
 
         // Check group membership
         const group = await Group.findById(transaction.groupId);
@@ -196,6 +196,7 @@ router.put('/:id', async (req, res) => {
         }
 
         transaction.description = description.trim();
+        transaction.syncedAt = new Date();
         await transaction.save();
 
         await Group.findByIdAndUpdate(transaction.groupId, { lastActivityAt: new Date() });
@@ -206,31 +207,49 @@ router.put('/:id', async (req, res) => {
     }
 });
 
-// DELETE /api/expenses/:id - Delete an expense
+// DELETE /api/expenses/:id - Delete an expense by MongoDB _id
 router.delete('/:id', async (req, res) => {
     try {
         const transaction = await Transaction.findById(req.params.id);
         if (!transaction) return res.status(404).json({ error: 'Expense not found.' });
-
-        // Check group membership
-        const group = await Group.findById(transaction.groupId);
-        if (!group) return res.status(404).json({ error: 'Group not found.' });
-
-        const isAdmin = String(group.adminId) === String(req.userId);
-        const isCreator = String(transaction.paidBy) === String(req.userId);
-
-        if (!isAdmin && !isCreator) {
-            return res.status(403).json({ error: 'Only the expense creator or group admin can delete.' });
-        }
-
-        await Transaction.findByIdAndDelete(req.params.id);
-        await Group.findByIdAndUpdate(transaction.groupId, { lastActivityAt: new Date() });
-
-        res.json({ success: true });
+        await handleSoftDelete(req, res, transaction);
     } catch (err) {
         res.status(500).json({ error: 'Failed to delete expense.' });
     }
 });
+
+// DELETE /api/expenses/client/:clientId - Delete an expense by clientId (UUID)
+router.delete('/client/:clientId', async (req, res) => {
+    try {
+        const transaction = await Transaction.findOne({ clientId: req.params.clientId });
+        if (!transaction) return res.status(404).json({ error: 'Expense not found.' });
+        await handleSoftDelete(req, res, transaction);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to delete expense.' });
+    }
+});
+
+// Helper for soft delete
+async function handleSoftDelete(req, res, transaction) {
+    // Check group membership
+    const group = await Group.findById(transaction.groupId);
+    if (!group) return res.status(404).json({ error: 'Group not found.' });
+
+    const isAdmin = String(group.adminId) === String(req.userId);
+    const isCreator = String(transaction.paidBy) === String(req.userId);
+
+    if (!isAdmin && !isCreator) {
+        return res.status(403).json({ error: 'Only the expense creator or group admin can delete.' });
+    }
+
+    transaction.deleted = true;
+    transaction.syncedAt = new Date();
+    await transaction.save();
+
+    await Group.findByIdAndUpdate(transaction.groupId, { lastActivityAt: new Date() });
+
+    res.json({ success: true });
+}
 
 // GET /api/expenses/:groupId/balances - Compute pairwise balances
 router.get('/:groupId/balances', async (req, res) => {
@@ -241,7 +260,7 @@ router.get('/:groupId/balances', async (req, res) => {
             return res.status(403).json({ error: 'You are not a member of this group.' });
         }
 
-        const transactions = await Transaction.find({ groupId: req.params.groupId }).lean();
+        const transactions = await Transaction.find({ groupId: req.params.groupId, deleted: { $ne: true } }).lean();
 
         // Compute net balances
         const balances = {};

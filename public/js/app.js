@@ -6,6 +6,16 @@ let currentGroup = null;
 let groups = [];
 let currentSplitType = 'EQUAL';
 
+// ---- Greeting Helper ----
+function getGreeting(name) {
+    const hour = new Date().getHours();
+    let timeGreeting;
+    if (hour < 12) timeGreeting = 'Good morning';
+    else if (hour < 17) timeGreeting = 'Good afternoon';
+    else timeGreeting = 'Good evening';
+    return `${timeGreeting}, ${name}! 👋`;
+}
+
 // ---- Init ----
 async function init() {
     currentSession = await Auth.getSession();
@@ -33,6 +43,13 @@ async function goToDashboard() {
     if(dashBtn) dashBtn.classList.add('active');
 
     document.getElementById('user-name-badge').textContent = currentSession.user.name;
+    
+    // Update greeting
+    const greetingEl = document.getElementById('greeting-text');
+    const greetingSub = document.getElementById('greeting-sub');
+    if (greetingEl) greetingEl.textContent = getGreeting(currentSession.user.name);
+    if (greetingSub) greetingSub.textContent = "Here's what's happening with your groups";
+    
     await loadGroups();
     await UI.updateSyncIndicator();
     if (navigator.onLine) doSync();
@@ -496,7 +513,7 @@ document.getElementById('gs-members-list').addEventListener('click', async (e) =
         // Re-trigger settings screen to refresh members
         document.getElementById('btn-group-settings').click();
     } catch (ex) {
-        alert('Failed: ' + ex.message);
+        UI.showToast('Failed: ' + ex.message, 'error');
     }
 });
 
@@ -510,7 +527,7 @@ document.getElementById('btn-leave-group').addEventListener('click', async () =>
         await loadGroups();
         UI.showScreen('screen-dashboard');
     } catch (ex) {
-        alert('Failed: ' + ex.message);
+        UI.showToast('Failed: ' + ex.message, 'error');
     }
 });
 
@@ -524,7 +541,7 @@ document.getElementById('btn-archive-group').addEventListener('click', async () 
         await loadGroups();
         UI.showScreen('screen-dashboard');
     } catch (ex) {
-        alert('Failed: ' + ex.message);
+        UI.showToast('Failed: ' + ex.message, 'error');
     }
 });
 
@@ -547,7 +564,8 @@ document.getElementById('btn-create-group-confirm').addEventListener('click', as
         await Sync.createGroup(name);
         UI.hideModal('modal-create-group');
         await loadGroups();
-    } catch (ex) { alert(ex.message); }
+        UI.showToast('Group created successfully!', 'success');
+    } catch (ex) { UI.showToast(ex.message, 'error'); }
 });
 
 // Join Group
@@ -562,7 +580,8 @@ document.getElementById('btn-join-group-confirm').addEventListener('click', asyn
         await Sync.joinGroup(code);
         UI.hideModal('modal-join-group');
         await loadGroups();
-    } catch (ex) { alert(ex.message); }
+        UI.showToast('Joined group successfully!', 'success');
+    } catch (ex) { UI.showToast(ex.message, 'error'); }
 });
 
 // ---- Add Expense ----
@@ -579,21 +598,21 @@ document.getElementById('btn-add-expense-confirm').addEventListener('click', asy
     const description = document.getElementById('exp-desc').value.trim();
     const amount = parseFloat(document.getElementById('exp-amount').value);
     const paidBy = document.getElementById('exp-payer').value;
-    if (!description || !amount || !paidBy) { alert('Please fill all fields.'); return; }
-    if (amount <= 0) { alert('Amount must be greater than 0.'); return; }
+    if (!description || !amount || !paidBy) { UI.showToast('Please fill all fields.', 'warning'); return; }
+    if (amount <= 0) { UI.showToast('Amount must be greater than 0.', 'warning'); return; }
 
     // Calculate splits based on current split type
     const splits = calculateCurrentSplits(amount);
 
     if (!splits.length) {
-        alert('Select at least one member to split with.');
+        UI.showToast('Select at least one member to split with.', 'warning');
         return;
     }
 
     // Validate splits total
     const splitsTotal = splits.reduce((sum, s) => sum + s.amount, 0);
     if (Math.abs(splitsTotal - amount) > 0.02) {
-        alert(`Splits total (₹${splitsTotal.toFixed(2)}) does not match amount (₹${amount.toFixed(2)}). Please adjust.`);
+        UI.showToast(`Splits total (₹${splitsTotal.toFixed(2)}) doesn't match amount (₹${amount.toFixed(2)}). Please adjust.`, 'warning');
         return;
     }
 
@@ -625,7 +644,7 @@ document.getElementById('btn-delete-expense').addEventListener('click', async ()
             if (navigator.onLine) doSync();
         }
     } catch (ex) {
-        alert('Failed to delete: ' + ex.message);
+        UI.showToast('Failed to delete: ' + ex.message, 'error');
     }
 });
 
@@ -661,7 +680,7 @@ document.getElementById('settlement-section').addEventListener('click', (e) => {
         QRPay.showPaymentForm(payload);
     } else {
         // Fallback or Strict Error per Phase 8 requirements
-        alert("This user hasn't set up their UPI ID in their profile. Settlements requiring UPI cannot proceed.");
+        UI.showToast("This user hasn't set up their UPI ID. Settlements requiring UPI cannot proceed.", 'warning');
     }
 });
 
@@ -681,7 +700,7 @@ document.getElementById('btn-settle-confirm').addEventListener('click', async ()
         await UI.updateSyncIndicator();
         if (navigator.onLine) doSync();
     } catch (ex) {
-        alert('Settlement failed: ' + ex.message);
+        UI.showToast('Settlement failed: ' + ex.message, 'error');
     }
 });
 
