@@ -9,10 +9,10 @@ const router = express.Router();
 const ACCESS_EXPIRY = '15m';
 const REFRESH_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
-// Rate limiter: 5 auth attempts per 15 minutes per IP
+// Rate limiter: 15 auth attempts per 15 minutes per IP
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 5,
+    max: 15,
     message: { error: 'Too many attempts. Please try again after 15 minutes.' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -49,23 +49,32 @@ function clearRefreshCookie(res) {
 // POST /api/auth/register
 router.post('/register', authLimiter, async (req, res) => {
     try {
-        const { name, email, password } = req.body;
+        const { name, email, password, upiId } = req.body;
 
-        if (!name || !email || !password) {
-            return res.status(400).json({ error: 'Name, email, and password are required.' });
+        if (!name || !email || !password || !upiId) {
+            return res.status(400).json({ error: 'Name, email, password, and UPI ID are required.' });
         }
 
         // Validate password strength
         const pwError = User.validatePassword(password);
         if (pwError) return res.status(400).json({ error: pwError });
 
+        // Validate UPI ID
+        const upiError = User.validateUpiId(upiId);
+        if (upiError) return res.status(400).json({ error: upiError });
+
         const existing = await User.findOne({ email });
         if (existing) {
             return res.status(409).json({ error: 'Email already registered.' });
         }
 
+        const existingUpi = await User.findOne({ upiId });
+        if (existingUpi) {
+            return res.status(409).json({ error: 'UPI ID already registered to another account.' });
+        }
+
         const refreshToken = generateRefreshToken();
-        const user = new User({ name, email, password, refreshToken });
+        const user = new User({ name, email, password, upiId, refreshToken });
         await user.save();
 
         const accessToken = generateAccessToken(user._id);

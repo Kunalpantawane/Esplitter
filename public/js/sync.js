@@ -85,6 +85,7 @@ const Sync = (() => {
                 splits: tx.splits,
                 type: tx.type || 'EXPENSE',
                 splitType: tx.splitType || 'EQUAL',
+                status: tx.status || (tx.type === 'PAYMENT' ? 'PENDING' : 'PAID'),
             }));
 
             const res = await fetch(API, {
@@ -155,6 +156,7 @@ const Sync = (() => {
                         splits: tx.splits,
                         type: tx.type || 'EXPENSE',
                         splitType: tx.splitType || 'EQUAL',
+                        status: tx.status || (tx.type === 'PAYMENT' ? 'PENDING' : 'PAID'),
                         syncStatus: 'SYNCED',
                         createdAt: tx.createdAt || new Date().toISOString(),
                     });
@@ -164,13 +166,16 @@ const Sync = (() => {
                         description: tx.description,
                         amount: tx.amount,
                         splits: tx.splits,
-                        splitType: tx.splitType || 'EQUAL'
+                        splitType: tx.splitType || 'EQUAL',
+                        status: tx.status || (tx.type === 'PAYMENT' ? 'PENDING' : 'PAID')
                     });
                 }
             }
 
             // ---- Merge server groups ----
+            const serverGroupIds = [];
             for (const g of (serverGroups || [])) {
+                serverGroupIds.push(String(g._id));
                 await db.groups.put({
                     id: String(g._id),
                     name: g.name,
@@ -179,6 +184,16 @@ const Sync = (() => {
                     members: g.members,
                     lastActivityAt: g.lastActivityAt,
                 });
+            }
+
+            // ---- Cleanup local groups not in serverGroups ----
+            const localGroups = await db.groups.toArray();
+            for (const lg of localGroups) {
+                if (!serverGroupIds.includes(lg.id)) {
+                    await db.groups.delete(lg.id);
+                    // Cascade delete transactions locally
+                    await db.transactions.where('groupId').equals(lg.id).delete();
+                }
             }
 
             // ---- Update state ----
@@ -268,6 +283,7 @@ const Sync = (() => {
         try {
             const res = await fetch(`${API}/groups`, {
                 headers: Auth.authHeader(session.token),
+                cache: 'no-store'
             });
             if (!res.ok) return db.groups.toArray();
 
@@ -336,9 +352,7 @@ const Sync = (() => {
         return { ...g, id: String(g._id) };
     }
 
-    // ---- Expense Operations ----
-
-    async function addExpense({ groupId, description, amount, paidBy, splits, type, splitType }) {
+    async function addExpense({ groupId, description, amount, paidBy, splits, type, splitType, status }) {
         const clientId = crypto.randomUUID();
         const expense = {
             clientId,
@@ -349,6 +363,7 @@ const Sync = (() => {
             splits,
             type: type || 'EXPENSE',
             splitType: splitType || 'EQUAL',
+            status: type === 'PAYMENT' ? 'PENDING' : 'PAID', // Defaults
             syncStatus: 'PENDING',
             retryCount: 0,
             createdAt: new Date().toISOString(),
@@ -378,15 +393,27 @@ const Sync = (() => {
         }
     }
 
-    async function settleDebt({ groupId, fromUserId, toUserId, toUserName, amount }) {
-        return addExpense({
-            groupId,
-            description: `💸 Settlement to ${toUserName}`,
-            amount,
-            paidBy: fromUserId,
-            splits: [{ userId: toUserId, amount }],
-            type: 'PAYMENT',
-        });
+    async function updateSettlementStatus(clientId, serverId, status) {
+        // Update locally
+        await db.transactions.update(clientId, { status });
+        UI.invalidateBalanceCache();
+
+        // Push to server if online and we have serverId
+        if (navigator.onLine && serverId) {
+            try {
+                const session = await Auth.getSession();
+                if (!session) return;
+                await fetch(`/api/expenses/${serverId}/settle-status`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json', ...Auth.authHeader(session.token) },
+                    body: JSON.stringify({ status })
+                });
+            } catch (err) {
+                console.warn('Failed to update status on server:', err.message);
+                // In a perfect offline-first world, we would queue this state change.
+                // For simplicity, we just rely on the next full sync or a manual retry if it was critical.
+            }
+        }
     }
 
     async function getGroupTransactions(groupId) {
@@ -434,14 +461,14 @@ const Sync = (() => {
     async function archiveGroup(groupId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}`, {
-            method: 'DELETE',
+        const res = await fetch(`${GROUP_API}/${groupId}/archive`, {
+            method: 'PATCH',
             headers: Auth.authHeader(session.token),
             credentials: 'include',
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to archive group.');
-        await db.groups.delete(groupId);
+        await db.groups.update(groupId, { isArchived: true, lastActivityAt: new Date() });
         return data;
     }
 
@@ -474,7 +501,7 @@ const Sync = (() => {
 
     return {
         syncWithServer, syncGroups, createGroup, joinGroup,
-        addExpense, settleDebt, deleteExpense, getGroupTransactions,
+        addExpense, updateSettlementStatus, deleteExpense, getGroupTransactions,
         getPendingCount, getFailedCount, retryFailed,
         isSyncInProgress, getLastSyncTime, checkActualConnectivity,
         getGroupDetail, updateGroup, archiveGroup, removeMember, leaveGroup,

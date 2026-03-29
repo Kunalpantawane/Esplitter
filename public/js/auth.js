@@ -4,15 +4,19 @@ const Auth = (() => {
     const API = '/api/auth';
     const USER_API = '/api/user';
 
-    async function register(name, email, password) {
+    async function register(name, email, password, upiId) {
         const res = await fetch(`${API}/register`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include', // send/receive cookies
-            body: JSON.stringify({ name, email, password }),
+            body: JSON.stringify({ name, email, password, upiId }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Registration failed.');
+        if (!res.ok) {
+            const err = new Error(data.error || 'Registration failed.');
+            err.status = res.status;
+            throw err;
+        }
         await _saveSession(data);
         return data;
     }
@@ -25,7 +29,11 @@ const Auth = (() => {
             body: JSON.stringify({ email, password }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Login failed.');
+        if (!res.ok) {
+            const err = new Error(data.error || 'Login failed.');
+            err.status = res.status;
+            throw err;
+        }
         await _saveSession(data);
         return data;
     }

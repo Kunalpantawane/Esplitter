@@ -37,6 +37,7 @@ router.post('/', async (req, res) => {
                         splits: tx.splits,
                         splitType: tx.splitType || 'EQUAL',
                         type: tx.type || 'EXPENSE',
+                        status: tx.status || (tx.type === 'PAYMENT' ? 'PENDING' : 'PAID'),
                         syncedAt: new Date(),
                     },
                     { upsert: true, new: true }
@@ -96,6 +97,7 @@ router.post('/groups', async (req, res) => {
                 members: [req.userId],
             });
             await group.save();
+            await group.populate('members', 'name email upiId');
             return res.status(201).json({ group });
         }
 
@@ -107,6 +109,7 @@ router.post('/groups', async (req, res) => {
                 group.lastActivityAt = new Date();
                 await group.save();
             }
+            await group.populate('members', 'name email upiId');
             return res.json({ group });
         }
 
@@ -120,7 +123,7 @@ router.post('/groups', async (req, res) => {
 router.get('/groups', async (req, res) => {
     try {
         const groups = await Group.find({ members: req.userId })
-            .populate('members', 'name email')
+            .populate('members', 'name email upiId')
             .lean();
         res.json({ groups });
     } catch (err) {

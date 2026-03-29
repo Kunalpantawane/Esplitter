@@ -138,13 +138,25 @@ const UI = (() => {
             </div>`;
             return;
         }
-        list.innerHTML = groups
+
+        // Sort groups: active first, archived last, then by activity
+        const sortedGroups = [...groups].sort((a, b) => {
+            if (a.isArchived && !b.isArchived) return 1;
+            if (!a.isArchived && b.isArchived) return -1;
+            const aDate = new Date(a.lastActivityAt || 0).getTime();
+            const bDate = new Date(b.lastActivityAt || 0).getTime();
+            return bDate - aDate;
+        });
+
+        list.innerHTML = sortedGroups
             .map((g) => {
                 const activity = g.lastActivityAt ? _timeAgo(new Date(g.lastActivityAt)) : '';
+                const archiveStyle = g.isArchived ? 'opacity: 0.6; background-color: #f9f9f9;' : '';
+                const archiveBadge = g.isArchived ? '<span class="badge" style="background:#ddd; color:#555; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-left: 8px;">Archived</span>' : '';
                 return `
-        <div class="group-card" data-id="${g.id || g._id}">
+        <div class="group-card" data-id="${g.id || g._id}" style="${archiveStyle}">
           <div>
-            <div class="group-card-name">${escapeHtml(g.name)}</div>
+            <div class="group-card-name">${escapeHtml(g.name)}${archiveBadge}</div>
             <div class="group-card-meta">${(g.members || []).length} member(s) · Code: <strong>${g.inviteCode || '—'}</strong></div>
             ${activity ? `<div class="group-card-activity">${activity}</div>` : ''}
           </div>
@@ -172,7 +184,13 @@ const UI = (() => {
 
     async function renderGroupDetail(group, session) {
         document.getElementById('group-title').textContent = group.name;
-        document.getElementById('invite-code-display').textContent = `Code: ${group.inviteCode}`;
+        document.getElementById('invite-code-display').innerHTML = `Code: ${group.inviteCode} ${group.isArchived ? '<span class="badge" style="background:#ddd; color:#555; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-left:8px;">Archived</span>' : ''}`;
+
+        // Disable add expense button if archived
+        const btnAddExpense = document.getElementById('btn-add-expense');
+        if (btnAddExpense) {
+            btnAddExpense.style.display = group.isArchived ? 'none' : 'block';
+        }
 
         // Show skeletons before fetching transactions
         renderExpenseSkeletons('expense-list', 5);
@@ -200,6 +218,8 @@ const UI = (() => {
         });
 
         for (const tx of transactions) {
+            if (tx.status === 'PENDING') continue; // Ignore pending payments
+
             const payerId = String(tx.paidBy);
             if (net[payerId] !== undefined) net[payerId] += Number(tx.amount);
             for (const split of (tx.splits || [])) {
@@ -303,28 +323,76 @@ const UI = (() => {
         container.innerHTML = html;
     }
 
-    // ---- Settlement section ----
     function _renderSettlement(transactions, members, myId, group, debts) {
         const container = document.getElementById('settlement-section');
         const groupId = group.id || String(group._id);
+
+        // Find existing pending requests related to me
+        const myPendingPayments = transactions.filter(tx => tx.type === 'PAYMENT' && tx.status === 'PENDING' && String(tx.paidBy) === myId);
+        const othersPendingRequestsToMe = transactions.filter(tx => tx.type === 'PAYMENT' && tx.status === 'PENDING' && tx.splits && String(tx.splits[0].userId) === myId);
 
         // Filter debts involving current user
         const myDebts = debts.filter(d => d.from === myId); // I owe someone
         const owedToMe = debts.filter(d => d.to === myId);   // Someone owes me
 
-        if (myDebts.length === 0 && owedToMe.length === 0) {
+        if (myDebts.length === 0 && owedToMe.length === 0 && myPendingPayments.length === 0 && othersPendingRequestsToMe.length === 0) {
             container.innerHTML = '';
             return;
         }
 
         let html = `<h4>🤝 Settlements</h4>`;
 
+        // Render My Pending Payments (I need to pay)
+        html += myPendingPayments.map(tx => {
+            const creditorId = tx.splits[0].userId;
+            const creditorName = _getMemberName(members, creditorId);
+            const creditorMember = members.find(m => (m.id || String(m._id)) === creditorId);
+            const toUpi = creditorMember ? creditorMember.upiId : '';
+            return `<div class="settle-card settle-owe">
+                <div class="settle-info">
+                    <span class="settle-label" style="color:#d97706">Payment Requested By</span>
+                    <span class="settle-target">${escapeHtml(creditorName)}</span>
+                </div>
+                <div class="settle-right">
+                    <span class="settle-amt">₹${Number(tx.amount).toFixed(2)}</span>
+                    <button class="btn btn-primary btn-xs btn-pay-now"
+                        data-tx-id="${tx._id}"
+                        data-client-id="${tx.clientId}"
+                        data-group="${groupId}"
+                        data-to="${creditorId}" data-to-name="${escapeHtml(creditorName)}"
+                        data-amt="${Number(tx.amount).toFixed(2)}"
+                        data-upi="${escapeHtml(toUpi || '')}">
+                        Pay Now
+                    </button>
+                    <button class="btn btn-ghost btn-xs btn-mark-paid-manual" data-client-id="${tx.clientId}" data-tx-id="${tx._id}">Mark Paid</button>
+                </div>
+            </div>`;
+        }).join('');
+
+        // Render Others Pending Requests To Me (I requested payment, waiting for confirmation)
+        html += othersPendingRequestsToMe.map(tx => {
+            const debtorId = String(tx.paidBy);
+            const debtorName = _getMemberName(members, debtorId);
+            return `<div class="settle-card settle-owed">
+                <div class="settle-info">
+                    <span class="settle-label" style="color:#d97706">Pending Payment From</span>
+                    <span class="settle-target">${escapeHtml(debtorName)}</span>
+                </div>
+                <div class="settle-right">
+                    <span class="settle-amt positive">₹${Number(tx.amount).toFixed(2)}</span>
+                    <button class="btn btn-primary btn-xs btn-confirm-receipt" data-client-id="${tx.clientId}" data-tx-id="${tx._id}">Confirm Receipt</button>
+                </div>
+            </div>`;
+        }).join('');
+
+        // Render remaining debts (not yet requested/pending)
         if (myDebts.length > 0) {
             html += myDebts.map(d => {
+                // Ignore if we already have a pending payment for this debt
+                if (myPendingPayments.some(tx => String(tx.splits[0].userId) === d.to)) return '';
                 const toName = _getMemberName(members, d.to);
                 const toMember = members.find(m => (m.id || String(m._id)) === d.to);
                 const toUpi = toMember ? toMember.upiId : '';
-                
                 return `<div class="settle-card settle-owe">
                     <div class="settle-info">
                         <span class="settle-label">You owe</span>
@@ -332,12 +400,12 @@ const UI = (() => {
                     </div>
                     <div class="settle-right">
                         <span class="settle-amt">₹${d.amount.toFixed(2)}</span>
-                        <button class="btn btn-primary btn-xs btn-settle"
+                        <button class="btn btn-primary btn-xs btn-pay-now"
                             data-group="${groupId}"
                             data-to="${d.to}" data-to-name="${escapeHtml(toName)}"
                             data-amt="${d.amount.toFixed(2)}"
                             data-upi="${escapeHtml(toUpi || '')}">
-                            ${toUpi ? 'Pay via UPI' : 'Mark Settled'}
+                            Pay Now
                         </button>
                     </div>
                 </div>`;
@@ -346,13 +414,23 @@ const UI = (() => {
 
         if (owedToMe.length > 0) {
             html += owedToMe.map(d => {
+                // Ignore if we already requested a payment for this debt
+                if (othersPendingRequestsToMe.some(tx => String(tx.paidBy) === d.from)) return '';
                 const fromName = _getMemberName(members, d.from);
                 return `<div class="settle-card settle-owed">
                     <div class="settle-info">
                         <span class="settle-label">Owed by</span>
                         <span class="settle-target">${escapeHtml(fromName)}</span>
                     </div>
-                    <span class="settle-amt positive">₹${d.amount.toFixed(2)}</span>
+                    <div class="settle-right">
+                        <span class="settle-amt positive">₹${d.amount.toFixed(2)}</span>
+                        <button class="btn btn-secondary btn-xs btn-request-payment"
+                            data-group="${groupId}"
+                            data-from="${d.from}"
+                            data-amt="${d.amount.toFixed(2)}">
+                            Request Payment
+                        </button>
+                    </div>
                 </div>`;
             }).join('');
         }

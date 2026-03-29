@@ -7,7 +7,7 @@ const userSchema = new mongoose.Schema(
         email: { type: String, required: true, unique: true, lowercase: true, trim: true },
         password: { type: String, required: true },
         phone: { type: String, trim: true, sparse: true },
-        upiId: { type: String, trim: true },
+        upiId: { type: String, trim: true, required: true, unique: true },
         refreshToken: { type: String },
     },
     { timestamps: true }
@@ -23,7 +23,7 @@ userSchema.statics.validatePassword = function (password) {
 
 // UPI ID format validation
 userSchema.statics.validateUpiId = function (upiId) {
-    if (!upiId) return null; // optional
+    if (!upiId) return 'UPI ID is required.';
     if (!/^[\w.\-]+@[\w]+$/.test(upiId)) return 'Invalid UPI ID format. Use format: name@bank';
     return null;
 };

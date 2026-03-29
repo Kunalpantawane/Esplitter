@@ -1,5 +1,30 @@
 // app.js - Main application (uses window.db, window.Auth, window.Sync, window.UI)
 
+// ---- Utils ----
+function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+    };
+}
+
+const retryWithBackoff = async (fn, retries = 3) => {
+    let delay = 1000;
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (err) {
+            if (err.status === 429 && i < retries - 1) {
+                await new Promise(res => setTimeout(res, delay));
+                delay *= 2; // exponential
+            } else {
+                throw err;
+            }
+        }
+    }
+};
+
 // ---- App State ----
 let currentSession = null;
 let currentGroup = null;
@@ -60,6 +85,12 @@ async function loadGroups() {
     groups = await Sync.syncGroups();
     if (!groups.length) groups = await db.groups.toArray();
     UI.renderGroups(groups, openGroup);
+
+    // Ensure the active group reference is updated with fresh data
+    if (currentGroup) {
+        const freshGroup = groups.find(g => (g.id || String(g._id)) === (currentGroup.id || String(currentGroup._id)));
+        if (freshGroup) currentGroup = freshGroup;
+    }
 }
 
 async function openGroup(groupId) {
@@ -95,7 +126,7 @@ async function doSync() {
     scheduleSmarterSync();
 }
 
-async function handleManualSync() {
+const handleManualSync = debounce(async () => {
     const failedCount = await Sync.getFailedCount();
     if (failedCount > 0) {
         await Sync.retryFailed();
@@ -104,7 +135,7 @@ async function handleManualSync() {
     } else {
         await doSync();
     }
-}
+}, 1000);
 
 // ---- Network ----
 function setupNetworkListeners() {
@@ -124,9 +155,8 @@ function setupNetworkListeners() {
 async function scheduleSmarterSync() {
     if (_syncIntervalId) clearInterval(_syncIntervalId);
     
-    // 30 seconds if pending items, 120 seconds if idle
-    const pendingCount = await Sync.getPendingCount();
-    const intervalMs = pendingCount > 0 ? 30 * 1000 : 120 * 1000;
+    // Poll every 10 seconds (controlled real-time feel)
+    const intervalMs = 10 * 1000;
     
     _syncIntervalId = setInterval(doSync, intervalMs);
 }
@@ -303,17 +333,27 @@ document.querySelectorAll('.nav-item').forEach((btn) => {
 document.getElementById('form-login').addEventListener('submit', async (e) => {
     e.preventDefault();
     const err = document.getElementById('login-error');
+    const btn = e.target.querySelector('button[type="submit"]');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Logging in...';
     err.textContent = '';
     try {
-        await Auth.login(
+        await retryWithBackoff(() => Auth.login(
             document.getElementById('login-email').value.trim(),
             document.getElementById('login-password').value
-        );
+        ));
         currentSession = await Auth.getSession();
         Auth.startAutoRefresh();
         await goToDashboard();
     } catch (ex) {
+        if (ex.status === 429) {
+            UI.showToast("Too many attempts. Wait a few seconds.", "warning");
+        }
         err.textContent = ex.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
     }
 });
 
@@ -321,18 +361,29 @@ document.getElementById('form-login').addEventListener('submit', async (e) => {
 document.getElementById('form-register').addEventListener('submit', async (e) => {
     e.preventDefault();
     const err = document.getElementById('register-error');
+    const btn = e.target.querySelector('button[type="submit"]');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Registering...';
     err.textContent = '';
     try {
-        await Auth.register(
+        await retryWithBackoff(() => Auth.register(
             document.getElementById('reg-name').value.trim(),
             document.getElementById('reg-email').value.trim(),
-            document.getElementById('reg-password').value
-        );
+            document.getElementById('reg-password').value,
+            document.getElementById('reg-upi').value.trim()
+        ));
         currentSession = await Auth.getSession();
         Auth.startAutoRefresh();
         await goToDashboard();
     } catch (ex) {
+        if (ex.status === 429) {
+            UI.showToast("Too many attempts. Wait a few seconds.", "warning");
+        }
         err.textContent = ex.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
     }
 });
 
@@ -616,16 +667,28 @@ document.getElementById('btn-add-expense-confirm').addEventListener('click', asy
         return;
     }
 
-    await Sync.addExpense({
-        groupId: currentGroup.id || String(currentGroup._id),
-        description, amount, paidBy, splits,
-        splitType: currentSplitType,
-    });
+    const btn = document.getElementById('btn-add-expense-confirm');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
 
-    UI.hideModal('modal-add-expense');
-    await UI.renderGroupDetail(currentGroup, currentSession);
-    await UI.updateSyncIndicator();
-    if (navigator.onLine) doSync();
+    try {
+        await Sync.addExpense({
+            groupId: currentGroup.id || String(currentGroup._id),
+            description, amount, paidBy, splits,
+            splitType: currentSplitType,
+        });
+
+        UI.hideModal('modal-add-expense');
+        await UI.renderGroupDetail(currentGroup, currentSession);
+        await UI.updateSyncIndicator();
+        if (navigator.onLine) doSync();
+    } catch (ex) {
+        UI.showToast(ex.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
 });
 
 // ---- Delete Expense ----
@@ -653,55 +716,94 @@ document.getElementById('btn-manual-sync').addEventListener('click', handleManua
 
 // Settlement — delegate clicks on settle buttons
 let pendingSettle = null;
-document.getElementById('settlement-section').addEventListener('click', (e) => {
-    const btn = e.target.closest('.btn-settle');
-    if (!btn) return;
-    pendingSettle = {
-        groupId: btn.dataset.group,
-        toUserId: btn.dataset.to,
-        toUserName: btn.dataset.toName,
-        amount: parseFloat(btn.dataset.amt),
-        upiId: btn.dataset.upi
-    };
-    
-    // Phase 8 UPI Settlement Logic
-    if (pendingSettle.upiId) {
-        // Build payload for QRPay module
-        const payload = {
-            upiId: pendingSettle.upiId,
-            name: pendingSettle.toUserName,
-            amount: pendingSettle.amount,
-            note: 'Group Settlement',
-            settleContext: {
-                groupId: pendingSettle.groupId,
-                toUserId: pendingSettle.toUserId
-            }
+document.getElementById('settlement-section').addEventListener('click', async (e) => {
+    // 1. Request Payment (Creditor creates a PENDING payment)
+    if (e.target.closest('.btn-request-payment')) {
+        const btn = e.target.closest('.btn-request-payment');
+        try {
+            await Sync.addExpense({
+                groupId: btn.dataset.group,
+                description: `Requesting Payment`,
+                amount: parseFloat(btn.dataset.amt),
+                paidBy: btn.dataset.from, // The one who pays is the debtor
+                splits: [{ userId: currentSession.user.id, amount: parseFloat(btn.dataset.amt) }], // The one receiving is the creditor
+                type: 'PAYMENT'
+            });
+            UI.showToast('Payment requested!', 'success');
+            await UI.renderGroupDetail(currentGroup, currentSession);
+            if (navigator.onLine) doSync();
+        } catch (ex) {
+            UI.showToast('Failed to request payment: ' + ex.message, 'error');
+        }
+        return;
+    }
+
+    // 2. Pay Now via UPI (Debtor pays)
+    if (e.target.closest('.btn-pay-now')) {
+        const btn = e.target.closest('.btn-pay-now');
+        pendingSettle = {
+            groupId: btn.dataset.group,
+            toUserId: btn.dataset.to,
+            toUserName: btn.dataset.toName,
+            amount: parseFloat(btn.dataset.amt),
+            upiId: btn.dataset.upi,
+            clientId: btn.dataset.clientId || null,
+            serverId: btn.dataset.txId || null
         };
-        QRPay.showPaymentForm(payload);
-    } else {
-        // Fallback or Strict Error per Phase 8 requirements
-        UI.showToast("This user hasn't set up their UPI ID. Settlements requiring UPI cannot proceed.", 'warning');
+        
+        if (pendingSettle.upiId) {
+            const payload = {
+                upiId: pendingSettle.upiId,
+                name: pendingSettle.toUserName,
+                amount: pendingSettle.amount,
+                note: 'Group Settlement',
+                settleContext: {
+                    groupId: pendingSettle.groupId,
+                    toUserId: pendingSettle.toUserId,
+                    clientId: pendingSettle.clientId,
+                    serverId: pendingSettle.serverId
+                }
+            };
+            QRPay.showPaymentForm(payload);
+        } else {
+            UI.showToast("This user hasn't set up their UPI ID.", 'warning');
+        }
+        return;
+    }
+
+    // 3. Mark Paid Manual (Debtor marks as PAID without UPI)
+    if (e.target.closest('.btn-mark-paid-manual')) {
+        const btn = e.target.closest('.btn-mark-paid-manual');
+        try {
+            await Sync.updateSettlementStatus(btn.dataset.clientId, btn.dataset.txId, 'PAID');
+            UI.showToast('Marked as paid!', 'success');
+            await UI.renderGroupDetail(currentGroup, currentSession);
+            if (navigator.onLine) doSync();
+        } catch (ex) {
+            UI.showToast('Failed to update status: ' + ex.message, 'error');
+        }
+        return;
+    }
+
+    // 4. Confirm Receipt (Creditor confirms)
+    if (e.target.closest('.btn-confirm-receipt')) {
+        const btn = e.target.closest('.btn-confirm-receipt');
+        try {
+            await Sync.updateSettlementStatus(btn.dataset.clientId, btn.dataset.txId, 'CONFIRMED');
+            UI.showToast('Receipt confirmed!', 'success');
+            await UI.renderGroupDetail(currentGroup, currentSession);
+            if (navigator.onLine) doSync();
+        } catch (ex) {
+            UI.showToast('Failed to confirm receipt: ' + ex.message, 'error');
+        }
+        return;
     }
 });
 
-document.getElementById('btn-settle-confirm').addEventListener('click', async () => {
-    if (!pendingSettle || !currentSession) return;
-    try {
-        await Sync.settleDebt({
-            groupId: pendingSettle.groupId,
-            fromUserId: currentSession.user.id,
-            toUserId: pendingSettle.toUserId,
-            toUserName: pendingSettle.toUserName,
-            amount: pendingSettle.amount,
-        });
-        UI.hideModal('modal-settle');
-        pendingSettle = null;
-        await UI.renderGroupDetail(currentGroup, currentSession);
-        await UI.updateSyncIndicator();
-        if (navigator.onLine) doSync();
-    } catch (ex) {
-        UI.showToast('Settlement failed: ' + ex.message, 'error');
-    }
+// We don't need a single btn-settle-confirm modal anymore because the actions are immediate.
+// However, if the old modal HTML is still there, we leave this no-op or handle it.
+document.getElementById('btn-settle-confirm')?.addEventListener('click', async () => {
+    // Legacy fallback or customized offline-settle if we restore the manual modal
 });
 
 // Close modals (also stop scanner if open)

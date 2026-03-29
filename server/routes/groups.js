@@ -45,8 +45,30 @@ router.patch('/:id', async (req, res) => {
     }
 });
 
-// DELETE /api/groups/:id — Archive group (admin only)
+// DELETE /api/groups/:id — Delete group & cascade (admin only)
 router.delete('/:id', async (req, res) => {
+    try {
+        const group = await Group.findById(req.params.id);
+        if (!group) return res.status(404).json({ error: 'Group not found.' });
+        if (String(group.adminId) !== String(req.userId)) {
+            return res.status(403).json({ error: 'Only the admin can delete this group.' });
+        }
+
+        // Hard delete the group
+        await Group.deleteOne({ _id: group._id });
+        
+        // Cascade delete all transactions for this group
+        const Transaction = require('../models/Transaction');
+        await Transaction.deleteMany({ groupId: group._id });
+
+        res.json({ message: 'Group deleted successfully.' });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to delete group.' });
+    }
+});
+
+// PATCH /api/groups/:id/archive — Archive group (admin only)
+router.patch('/:id/archive', async (req, res) => {
     try {
         const group = await Group.findById(req.params.id);
         if (!group) return res.status(404).json({ error: 'Group not found.' });
@@ -58,7 +80,7 @@ router.delete('/:id', async (req, res) => {
         group.lastActivityAt = new Date();
         await group.save();
 
-        res.json({ message: 'Group archived successfully.' });
+        res.json({ message: 'Group archived successfully.', group });
     } catch (err) {
         res.status(500).json({ error: 'Failed to archive group.' });
     }

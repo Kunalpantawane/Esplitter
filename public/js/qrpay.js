@@ -260,16 +260,23 @@ const QRPay = (() => {
         try {
             const session = await Auth.getSession();
             
-            // Check if this is a group settlement context
-            if (scannedData.settleContext && typeof Sync !== 'undefined' && Sync.settleDebt) {
-                await Sync.settleDebt({
+            // Check if this is a group settlement context with an existing transaction
+            if (scannedData.settleContext && scannedData.settleContext.clientId && typeof Sync !== 'undefined') {
+                await Sync.updateSettlementStatus(
+                    scannedData.settleContext.clientId, 
+                    scannedData.settleContext.serverId, 
+                    'PAID'
+                );
+            } else if (scannedData.settleContext && typeof Sync !== 'undefined') {
+                // Fallback for ad-hoc settlement creation without pending request
+                await Sync.addExpense({
                     groupId: scannedData.settleContext.groupId,
-                    fromUserId: session.user.id,
-                    toUserId: scannedData.settleContext.toUserId,
-                    toUserName: scannedData.name || scannedData.upiId,
+                    description: `💸 Settlement to ${scannedData.name || scannedData.upiId}`,
                     amount: amount,
-                    // Note is ignored by the raw settleDebt command usually, 
-                    // but we can pass it if we want to expand it later.
+                    paidBy: session.user.id,
+                    splits: [{ userId: scannedData.settleContext.toUserId, amount: amount }],
+                    type: 'PAYMENT',
+                    status: 'PAID'
                 });
             } else if (groupId && typeof Sync !== 'undefined') {
                 // Ad-hoc PAYMENT string if just a loose QR scan in a group view
@@ -280,6 +287,7 @@ const QRPay = (() => {
                     paidBy: session.user.id,
                     splits: [{ userId: session.user.id, amount: amount }],
                     type: 'PAYMENT',
+                    status: 'PAID'
                 });
             }
         } catch (e) {

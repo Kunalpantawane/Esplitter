@@ -105,7 +105,7 @@ router.get('/detail/:id', async (req, res) => {
 // POST /api/expenses - Add a new expense (with validation)
 router.post('/', async (req, res) => {
     try {
-        const { groupId, description, amount, paidBy, splits, clientId, type, splitType, receiverId } = req.body;
+        const { groupId, description, amount, paidBy, splits, clientId, type, splitType, receiverId, status } = req.body;
 
         // Validate required fields
         if (!groupId || !description || !amount || !paidBy || !splits) {
@@ -162,6 +162,7 @@ router.post('/', async (req, res) => {
             splits,
             splitType: splitType || 'EQUAL',
             type: type || 'EXPENSE',
+            status: status || (type === 'PAYMENT' ? 'PENDING' : 'PAID'),
             syncedAt: new Date(),
         });
 
@@ -204,6 +205,49 @@ router.put('/:id', async (req, res) => {
         res.json({ transaction });
     } catch (err) {
         res.status(500).json({ error: 'Failed to update expense.' });
+    }
+});
+
+// PATCH /api/expenses/:id/settle-status - Update settlement status (role-based)
+router.patch('/:id/settle-status', async (req, res) => {
+    try {
+        const transaction = await Transaction.findById(req.params.id);
+        if (!transaction) return res.status(404).json({ error: 'Expense not found.' });
+
+        if (transaction.type !== 'PAYMENT') {
+            return res.status(400).json({ error: 'Only settlements (payments) can have status updates.' });
+        }
+
+        const { status } = req.body;
+        if (!['PENDING', 'PAID', 'CONFIRMED'].includes(status)) {
+            return res.status(400).json({ error: 'Invalid status.' });
+        }
+
+        const debtorId = String(transaction.paidBy);
+        const creditorId = transaction.splits && transaction.splits.length > 0 ? String(transaction.splits[0].userId) : String(transaction.receiverId);
+
+        // Security Validation
+        if (status === 'PAID') {
+            if (String(req.userId) !== debtorId) {
+                return res.status(403).json({ error: 'Only the debtor can mark as PAID.' });
+            }
+        } else if (status === 'CONFIRMED') {
+            if (String(req.userId) !== creditorId) {
+                return res.status(403).json({ error: 'Only the creditor can confirm receipt.' });
+            }
+        } else if (status === 'PENDING') {
+            if (String(req.userId) !== creditorId && String(req.userId) !== debtorId) {
+                return res.status(403).json({ error: 'Unauthorized.' });
+            }
+        }
+
+        transaction.status = status;
+        transaction.syncedAt = new Date();
+        await transaction.save();
+
+        res.json({ transaction });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to update settlement status.' });
     }
 });
 
@@ -269,6 +313,9 @@ router.get('/:groupId/balances', async (req, res) => {
         });
 
         for (const tx of transactions) {
+            // Ignore pending payments in balance calculation
+            if (tx.status === 'PENDING') continue;
+
             const payerId = String(tx.paidBy);
             if (balances[payerId]) balances[payerId].amount += Number(tx.amount);
             for (const split of (tx.splits || [])) {
