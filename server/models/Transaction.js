@@ -17,7 +17,6 @@ const transactionSchema = new mongoose.Schema(
         splitType: { type: String, enum: ['EQUAL', 'CUSTOM', 'PERCENTAGE'], default: 'EQUAL' },
         type: { type: String, enum: ['EXPENSE', 'PAYMENT'], default: 'EXPENSE' },
         status: { type: String, enum: ['PENDING', 'PAID', 'CONFIRMED'], default: 'PAID' }, // default PAID for backward compatibility and expenses
-        imageUrl: { type: String },
         deleted: { type: Boolean, default: false },
         syncedAt: { type: Date, default: Date.now },
     },
@@ -27,5 +26,8 @@ const transactionSchema = new mongoose.Schema(
 // Performance indexes
 transactionSchema.index({ groupId: 1, createdAt: -1 });
 transactionSchema.index({ groupId: 1, type: 1 });
+transactionSchema.index({ groupId: 1, deleted: 1, createdAt: -1 });
+transactionSchema.index({ groupId: 1, syncedAt: 1 });
+transactionSchema.index({ groupId: 1, deleted: 1, type: 1, status: 1 });
 
 module.exports = mongoose.model('Transaction', transactionSchema);

@@ -30,6 +30,13 @@ let currentSession = null;
 let currentGroup = null;
 let groups = [];
 let currentSplitType = 'EQUAL';
+let currentJoinRequests = [];
+
+function setActiveNav(targetScreenId) {
+    document.querySelectorAll('.nav-item').forEach((item) => {
+        item.classList.toggle('active', item.dataset.target === targetScreenId);
+    });
+}
 
 // ---- Greeting Helper ----
 function getGreeting(name) {
@@ -60,12 +67,8 @@ async function init() {
 
 async function goToDashboard() {
     UI.showScreen('screen-dashboard');
-    document.getElementById('bottom-nav').classList.remove('hidden');
-    
-    // Update active nav state
-    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-    const dashBtn = document.querySelector('.nav-item[data-target="screen-dashboard"]');
-    if(dashBtn) dashBtn.classList.add('active');
+    document.getElementById('bottom-nav')?.classList.remove('hidden');
+    setActiveNav('screen-dashboard');
 
     document.getElementById('user-name-badge').textContent = currentSession.user.name;
     
@@ -311,24 +314,6 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
     });
 });
 
-// Bottom Nav
-document.querySelectorAll('.nav-item').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-        document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        
-        const target = btn.dataset.target;
-        if (target === 'screen-dashboard') {
-            await goToDashboard();
-        } else if (target === 'screen-profile') {
-            // Trigger the existing profile button logic to fetch session
-            document.getElementById('btn-profile').click();
-        } else {
-            UI.showScreen(target);
-        }
-    });
-});
-
 // Login
 document.getElementById('form-login').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -392,13 +377,14 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
     Auth.stopAutoRefresh();
     await Auth.logout();
     currentSession = null; currentGroup = null; groups = [];
-    document.getElementById('bottom-nav').classList.add('hidden');
+    document.getElementById('bottom-nav')?.classList.add('hidden');
     UI.showScreen('screen-auth');
 });
 
 // ---- Profile ----
 document.getElementById('btn-profile').addEventListener('click', async () => {
     UI.showScreen('screen-profile');
+    setActiveNav('screen-profile');
     const session = await Auth.getSession();
     if (!session) return;
     document.getElementById('profile-email').textContent = session.user.email;
@@ -413,7 +399,7 @@ document.getElementById('btn-profile').addEventListener('click', async () => {
 });
 
 document.getElementById('btn-profile-back').addEventListener('click', () => {
-    UI.showScreen('screen-dashboard');
+    goToDashboard();
 });
 
 // Profile form — Save name & phone
@@ -455,6 +441,7 @@ document.getElementById('btn-profile-logout').addEventListener('click', async ()
     Auth.stopAutoRefresh();
     await Auth.logout();
     currentSession = null; currentGroup = null; groups = [];
+    document.getElementById('bottom-nav')?.classList.add('hidden');
     UI.showScreen('screen-auth');
 });
 
@@ -482,6 +469,9 @@ document.getElementById('btn-group-settings').addEventListener('click', async ()
     const archiveBtn = document.getElementById('btn-archive-group');
     archiveBtn.style.display = isAdmin ? 'block' : 'none';
 
+    const regenInviteBtn = document.getElementById('btn-regen-invite');
+    regenInviteBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+
     // Leave button text
     const leaveBtn = document.getElementById('btn-leave-group');
     leaveBtn.textContent = isAdmin ? 'Archive Group (Admin)' : 'Leave Group';
@@ -490,21 +480,56 @@ document.getElementById('btn-group-settings').addEventListener('click', async ()
     // Render members
     const members = currentGroup.members || [];
     const membersList = document.getElementById('gs-members-list');
-    membersList.innerHTML = members.map(m => {
+    let memberHtml = members.map(m => {
         const mid = String(m._id || m.id || m);
         const name = m.name || 'Member';
         const email = m.email || '';
         const isAdminMember = mid === String(currentGroup.adminId);
         const canRemove = isAdmin && !isAdminMember;
+        const canPromote = isAdmin && !isAdminMember;
         return `<div class="gs-member-row">
             <div class="gs-member-info">
                 <span class="gs-member-name">${UI.escapeHtml(name)}</span>
                 ${isAdminMember ? '<span class="gs-member-role">Admin</span>' : ''}
                 ${email ? `<span class="gs-member-email">${UI.escapeHtml(email)}</span>` : ''}
             </div>
-            ${canRemove ? `<button class="btn btn-ghost btn-xs btn-remove-member" data-user="${mid}" data-name="${UI.escapeHtml(name)}">Remove</button>` : ''}
+            <div style="display:flex;gap:8px;">
+                ${canPromote ? `<button class="btn btn-secondary btn-xs btn-transfer-admin" data-user="${mid}" data-name="${UI.escapeHtml(name)}">Make Admin</button>` : ''}
+                ${canRemove ? `<button class="btn btn-ghost btn-xs btn-remove-member" data-user="${mid}" data-name="${UI.escapeHtml(name)}">Remove</button>` : ''}
+            </div>
         </div>`;
     }).join('');
+
+    if (isAdmin) {
+        try {
+            const requests = await Sync.getJoinRequests(groupId);
+            currentJoinRequests = requests;
+            memberHtml += `<div class="gs-requests-section" style="margin-top:12px;">
+                    <div class="gs-requests-head">
+                        <label class="form-group-label">Pending Join Requests</label>
+                        <span class="gs-request-count" id="gs-request-count">${requests.length}</span>
+                    </div>
+                    ${requests.length ? requests.map((request) => `
+                        <div class="gs-member-row" data-request-row="${request.requestId}">
+                            <div class="gs-member-info">
+                                <span class="gs-member-name">${UI.escapeHtml(request.name || 'Member')}</span>
+                                ${request.email ? `<span class="gs-member-email">${UI.escapeHtml(request.email)}</span>` : ''}
+                            </div>
+                            <div style="display:flex;gap:8px;">
+                                <button class="btn btn-primary btn-xs btn-approve-request" data-request-id="${request.requestId}">Approve</button>
+                                <button class="btn btn-ghost btn-xs btn-reject-request" data-request-id="${request.requestId}">Reject</button>
+                            </div>
+                        </div>
+                    `).join('') : '<div class="gs-requests-empty">No pending requests.</div>'}
+                </div>`;
+        } catch (ex) {
+            UI.showToast(ex.message, 'warning');
+        }
+    } else {
+        currentJoinRequests = [];
+    }
+
+    membersList.innerHTML = memberHtml;
 });
 
 // Group settings back
@@ -550,8 +575,79 @@ document.getElementById('btn-copy-invite').addEventListener('click', () => {
     });
 });
 
+document.getElementById('btn-regen-invite').addEventListener('click', async () => {
+    if (!currentGroup) return;
+    try {
+        const groupId = currentGroup.id || String(currentGroup._id);
+        const newCode = await Sync.rotateInviteCode(groupId);
+        currentGroup.inviteCode = newCode;
+        document.getElementById('gs-invite-code').textContent = newCode;
+        UI.showToast('Invite code regenerated.', 'success');
+    } catch (ex) {
+        UI.showToast(ex.message, 'error');
+    }
+});
+
 // Remove member (delegated)
 document.getElementById('gs-members-list').addEventListener('click', async (e) => {
+    const list = document.getElementById('gs-members-list');
+
+    const approveBtn = e.target.closest('.btn-approve-request');
+    if (approveBtn) {
+        const requestId = approveBtn.dataset.requestId;
+        const row = list.querySelector(`[data-request-row="${requestId}"]`);
+        const snapshot = list.innerHTML;
+        if (row) row.remove();
+        try {
+            const groupId = currentGroup.id || String(currentGroup._id);
+            const updated = await Sync.approveJoinRequest(groupId, requestId);
+            currentGroup = { ...currentGroup, ...updated };
+            currentJoinRequests = currentJoinRequests.filter((r) => r.requestId !== requestId);
+            document.getElementById('btn-group-settings').click();
+            UI.showToast('Join request approved.', 'success');
+        } catch (ex) {
+            list.innerHTML = snapshot;
+            UI.showToast('Failed: ' + ex.message, 'error');
+        }
+        return;
+    }
+
+    const rejectBtn = e.target.closest('.btn-reject-request');
+    if (rejectBtn) {
+        const requestId = rejectBtn.dataset.requestId;
+        const row = list.querySelector(`[data-request-row="${requestId}"]`);
+        const snapshot = list.innerHTML;
+        if (row) row.remove();
+        try {
+            const groupId = currentGroup.id || String(currentGroup._id);
+            await Sync.rejectJoinRequest(groupId, requestId);
+            currentJoinRequests = currentJoinRequests.filter((r) => r.requestId !== requestId);
+            document.getElementById('btn-group-settings').click();
+            UI.showToast('Join request rejected.', 'info');
+        } catch (ex) {
+            list.innerHTML = snapshot;
+            UI.showToast('Failed: ' + ex.message, 'error');
+        }
+        return;
+    }
+
+    const transferBtn = e.target.closest('.btn-transfer-admin');
+    if (transferBtn) {
+        const userId = transferBtn.dataset.user;
+        const name = transferBtn.dataset.name;
+        if (!confirm(`Transfer admin role to ${name}?`)) return;
+        try {
+            const groupId = currentGroup.id || String(currentGroup._id);
+            const updated = await Sync.transferAdmin(groupId, userId);
+            currentGroup = { ...currentGroup, ...updated };
+            document.getElementById('btn-group-settings').click();
+            UI.showToast(`${name} is now admin.`, 'success');
+        } catch (ex) {
+            UI.showToast('Failed: ' + ex.message, 'error');
+        }
+        return;
+    }
+
     const btn = e.target.closest('.btn-remove-member');
     if (!btn) return;
     const userId = btn.dataset.user;
@@ -628,10 +724,14 @@ document.getElementById('btn-join-group-confirm').addEventListener('click', asyn
     const code = document.getElementById('join-invite-code').value.trim().toUpperCase();
     if (!code) return;
     try {
-        await Sync.joinGroup(code);
+        const result = await Sync.joinGroup(code);
         UI.hideModal('modal-join-group');
-        await loadGroups();
-        UI.showToast('Joined group successfully!', 'success');
+        if (result && result.pending) {
+            UI.showToast(result.message || 'Join request sent.', 'info');
+        } else {
+            await loadGroups();
+            UI.showToast('Joined group successfully!', 'success');
+        }
     } catch (ex) { UI.showToast(ex.message, 'error'); }
 });
 

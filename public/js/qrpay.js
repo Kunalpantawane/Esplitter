@@ -148,6 +148,10 @@ const QRPay = (() => {
 
     // ---- Show Payment Form ----
     function showPaymentForm(data) {
+        // Keep the latest payment payload in module state so button rendering,
+        // copy link, and record flows all use the same source of truth.
+        scannedData = { ...data };
+
         document.getElementById('pay-upi-id').textContent = data.upiId;
         document.getElementById('pay-name').textContent = data.name || 'Unknown';
 
@@ -188,11 +192,19 @@ const QRPay = (() => {
 
     // ---- Open UPI App ----
     function openUPIApp(url) {
-        // On mobile, window.location with upi:// opens the OS UPI intent picker
-        // On desktop, this won't work — we show a fallback
-        const link = document.createElement('a');
-        link.href = url;
-        link.click();
+        // Custom URL schemes are best triggered via location on mobile browsers.
+        // On desktop this usually fails, so we provide a quick fallback.
+        if (!url) {
+            UI.showToast('Invalid UPI link', 'warning');
+            return;
+        }
+
+        try {
+            window.location.href = url;
+        } catch (_) {
+            copyUPILink();
+            UI.showToast('Could not open app. UPI link copied.', 'warning');
+        }
     }
 
     // ---- Render UPI App Buttons & Desktop QR ----
@@ -202,9 +214,9 @@ const QRPay = (() => {
         const upiId = scannedData?.upiId || '';
         const name = scannedData?.name || '';
 
-        if (!upiId || amount <= 0) return;
+        if (!upiId) return;
 
-        const apps = getPaymentLinks(upiId, amount, note, name);
+        const apps = getPaymentLinks(upiId, amount > 0 ? amount : '', note, name);
         
         // Render mobile buttons
         const container = document.getElementById('upi-app-grid');

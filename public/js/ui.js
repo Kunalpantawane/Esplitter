@@ -203,7 +203,7 @@ const UI = (() => {
         // Use cached balances
         const { net, debts } = _getCachedDebts(groupId, transactions, members);
 
-        _renderBalances(transactions, members, net, debts);
+        _renderBalances(transactions, members, net, debts, myId);
         _renderSettlement(transactions, members, myId, group, debts);
         _renderExpenses(transactions, members, session, group);
     }
@@ -264,12 +264,13 @@ const UI = (() => {
         return { net, debts };
     }
 
-    function _getMemberName(members, id) {
+    function _getMemberName(members, id, currentUserId = null, selfLabel = 'You') {
+        if (currentUserId && String(id) === String(currentUserId)) return selfLabel;
         const m = members.find((m) => String(m._id || m.id || m) === String(id));
         return m ? (m.name || 'Member') : 'Someone';
     }
 
-    function _renderBalances(transactions, members, net, debts) {
+    function _renderBalances(transactions, members, net, debts, myId) {
         const container = document.getElementById('balance-summary');
 
         // Total group spending
@@ -291,8 +292,8 @@ const UI = (() => {
         // Show "A owes B" format
         if (debts.length > 0) {
             html += debts.map(d => {
-                const fromName = _getMemberName(members, d.from);
-                const toName = _getMemberName(members, d.to);
+                const fromName = _getMemberName(members, d.from, myId);
+                const toName = _getMemberName(members, d.to, myId);
                 return `<div class="debt-row">
                     <span class="debt-text">${escapeHtml(fromName)} owes ${escapeHtml(toName)}</span>
                     <span class="debt-amount">₹${d.amount.toFixed(2)}</span>
@@ -309,7 +310,7 @@ const UI = (() => {
         html += `<div class="net-section"><h5>Net per person</h5>`;
         html += Object.entries(net)
             .map(([id, amount]) => {
-                const name = _getMemberName(members, id);
+                const name = _getMemberName(members, id, myId);
                 const cls = amount >= 0 ? 'positive' : 'negative';
                 const sign = amount >= 0 ? '+' : '';
                 return `<div class="balance-row">
@@ -345,7 +346,7 @@ const UI = (() => {
         // Render My Pending Payments (I need to pay)
         html += myPendingPayments.map(tx => {
             const creditorId = tx.splits[0].userId;
-            const creditorName = _getMemberName(members, creditorId);
+            const creditorName = _getMemberName(members, creditorId, myId);
             const creditorMember = members.find(m => (m.id || String(m._id)) === creditorId);
             const toUpi = creditorMember ? creditorMember.upiId : '';
             return `<div class="settle-card settle-owe">
@@ -372,7 +373,7 @@ const UI = (() => {
         // Render Others Pending Requests To Me (I requested payment, waiting for confirmation)
         html += othersPendingRequestsToMe.map(tx => {
             const debtorId = String(tx.paidBy);
-            const debtorName = _getMemberName(members, debtorId);
+            const debtorName = _getMemberName(members, debtorId, myId);
             return `<div class="settle-card settle-owed">
                 <div class="settle-info">
                     <span class="settle-label" style="color:#d97706">Pending Payment From</span>
@@ -390,7 +391,7 @@ const UI = (() => {
             html += myDebts.map(d => {
                 // Ignore if we already have a pending payment for this debt
                 if (myPendingPayments.some(tx => String(tx.splits[0].userId) === d.to)) return '';
-                const toName = _getMemberName(members, d.to);
+                const toName = _getMemberName(members, d.to, myId);
                 const toMember = members.find(m => (m.id || String(m._id)) === d.to);
                 const toUpi = toMember ? toMember.upiId : '';
                 return `<div class="settle-card settle-owe">
@@ -416,7 +417,7 @@ const UI = (() => {
             html += owedToMe.map(d => {
                 // Ignore if we already requested a payment for this debt
                 if (othersPendingRequestsToMe.some(tx => String(tx.paidBy) === d.from)) return '';
-                const fromName = _getMemberName(members, d.from);
+                const fromName = _getMemberName(members, d.from, myId);
                 return `<div class="settle-card settle-owed">
                     <div class="settle-info">
                         <span class="settle-label">Owed by</span>
@@ -453,7 +454,7 @@ const UI = (() => {
 
         list.innerHTML = transactions
             .map((tx) => {
-                const payerName = _getMemberName(members, tx.paidBy);
+                const payerName = _getMemberName(members, tx.paidBy, myId);
                 const icon = (tx.type === 'PAYMENT') ? '💸' : '💰';
                 const typeLabel = (tx.type === 'PAYMENT') ? 'Settlement' : 'Expense';
                 const amtClass = (tx.type === 'PAYMENT') ? 'settlement' : '';
@@ -499,7 +500,7 @@ const UI = (() => {
         // Body
         document.getElementById('detail-amount').textContent = `₹${Number(tx.amount).toFixed(2)}`;
         document.getElementById('detail-desc').textContent = tx.description;
-        document.getElementById('detail-payer').textContent = _getMemberName(members, tx.paidBy);
+        document.getElementById('detail-payer').textContent = _getMemberName(members, tx.paidBy, myId);
         document.getElementById('detail-split-type').textContent = tx.splitType || 'Equal';
 
         const dateStr = tx.createdAt
@@ -518,7 +519,7 @@ const UI = (() => {
         // Split breakdown
         const splitsList = document.getElementById('detail-splits-list');
         splitsList.innerHTML = (tx.splits || []).map(s => {
-            const name = _getMemberName(members, s.userId);
+            const name = _getMemberName(members, s.userId, myId);
             return `<div class="detail-split-row">
                 <span class="detail-split-name">${escapeHtml(name)}</span>
                 <span class="detail-split-amount">₹${Number(s.amount).toFixed(2)}</span>
@@ -546,7 +547,7 @@ const UI = (() => {
         payerSelect.innerHTML = members
             .map((m) => {
                 const id = String(m._id || m.id || m);
-                const name = m.name || 'Member';
+                const name = id === session.user.id ? 'Me' : (m.name || 'Member');
                 const selected = id === session.user.id ? 'selected' : '';
                 return `<option value="${id}" ${selected}>${escapeHtml(name)}</option>`;
             })
@@ -555,7 +556,7 @@ const UI = (() => {
         checksContainer.innerHTML = members
             .map((m) => {
                 const id = String(m._id || m.id || m);
-                const name = m.name || 'Member';
+                const name = id === session.user.id ? 'Me' : (m.name || 'Member');
                 return `<label class="member-check-label">
           <input type="checkbox" value="${id}" ${id === session.user.id ? 'checked' : ''} />
           ${escapeHtml(name)}
@@ -564,8 +565,8 @@ const UI = (() => {
             .join('');
 
         // Populate custom split inputs
-        _populateSplitInputs('exp-custom-inputs', members, '₹');
-        _populateSplitInputs('exp-percentage-inputs', members, '%');
+        _populateSplitInputs('exp-custom-inputs', members, '₹', session.user.id);
+        _populateSplitInputs('exp-percentage-inputs', members, '%', session.user.id);
 
         // Reset split type to Equal
         document.querySelectorAll('.split-tab').forEach(t => t.classList.remove('active'));
@@ -578,11 +579,11 @@ const UI = (() => {
         document.getElementById('exp-percentage-total').innerHTML = '';
     }
 
-    function _populateSplitInputs(containerId, members, suffix) {
+    function _populateSplitInputs(containerId, members, suffix, currentUserId = null) {
         const container = document.getElementById(containerId);
         container.innerHTML = members.map(m => {
             const id = String(m._id || m.id || m);
-            const name = m.name || 'Member';
+            const name = id === currentUserId ? 'Me' : (m.name || 'Member');
             return `<div class="split-input-row">
                 <span class="split-name">${escapeHtml(name)}</span>
                 <input type="number" class="split-val" data-user="${id}" placeholder="0" min="0" step="0.01" />

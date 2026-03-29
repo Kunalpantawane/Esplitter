@@ -5,7 +5,10 @@
   "main": "server/app.js",
   "scripts": {
     "start": "node server/app.js",
-    "dev": "nodemon server/app.js"
+    "dev": "nodemon server/app.js",
+    "test": "jest --runInBand --no-cache",
+    "migrate:group-roles:dry": "node server/scripts/backfillGroupRoles.js --dry-run",
+    "migrate:group-roles": "node server/scripts/backfillGroupRoles.js --write"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
@@ -19,6 +22,9 @@
     "mongoose": "^8.0.3"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
+    "mongodb-memory-server": "^10.1.4",
     "nodemon": "^3.0.2"
+    ,"supertest": "^7.1.1"
   }
 }

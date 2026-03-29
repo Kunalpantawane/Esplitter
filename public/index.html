@@ -20,7 +20,7 @@
   <div id="screen-auth" class="screen active">
     <div class="auth-container">
       <div class="logo">
-        <span class="logo-icon">💸</span>
+        <img class="logo-icon" src="/images/logo.png" alt="Esplitter logo" />
         <h1>Esplitter</h1>
         <p>Split bills with friends, stress-free ✨</p>
       </div>
@@ -43,7 +43,7 @@
               aria-label="Toggle password">👁️</button>
           </div>
         </div>
-        <button type="submit" class="btn btn-primary">Welcome back 👋</button>
+        <button type="submit" class="btn btn-primary">Welcome back </button>
         <p id="login-error" class="form-error"></p>
       </form>
 
@@ -124,7 +124,7 @@
             <div class="empty-icon">🌟</div>
             <p>Your journey starts here!<br>Create or join a group to begin splitting expenses.</p>
           </div>
-        <button id="btn-add" class="fab" aria-label="Add new group or expense">+</button>
+        </div>
       </section>
     </main>
 
@@ -192,6 +192,7 @@
           <div class="invite-code-box">
             <span id="gs-invite-code" class="invite-code-large"></span>
             <button type="button" id="btn-copy-invite" class="btn btn-secondary btn-sm">📋 Copy</button>
+            <button type="button" id="btn-regen-invite" class="btn btn-ghost btn-sm" style="display:none;">🔄 Regenerate</button>
           </div>
         </div>
       </div>
@@ -255,18 +256,6 @@
       </div>
     </main>
   </div>
-
-  <!-- App Global Navigation (Visible when logged in) -->
-  <nav id="bottom-nav" class="bottom-nav hidden">
-    <button class="nav-item active" data-target="screen-dashboard" aria-label="Dashboard">
-      <span class="nav-icon">📊</span>
-      <span class="nav-label">Groups</span>
-    </button>
-    <button class="nav-item" data-target="screen-profile" aria-label="Profile">
-      <span class="nav-icon">👤</span>
-      <span class="nav-label">Profile</span>
-    </button>
-  </nav>
 
   </div> <!-- End .app-container -->
 

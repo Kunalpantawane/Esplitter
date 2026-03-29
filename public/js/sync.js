@@ -340,6 +340,14 @@ const Sync = (() => {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
 
+        if (data.pending) {
+            return {
+                pending: true,
+                groupId: data.groupId,
+                message: data.message || 'Join request sent. Waiting for admin approval.',
+            };
+        }
+
         const g = data.group;
         await db.groups.put({
             id: String(g._id),
@@ -349,7 +357,7 @@ const Sync = (() => {
             members: g.members,
             lastActivityAt: g.lastActivityAt,
         });
-        return { ...g, id: String(g._id) };
+        return { ...g, id: String(g._id), pending: false };
     }
 
     async function addExpense({ groupId, description, amount, paidBy, splits, type, splitType, status }) {
@@ -499,12 +507,85 @@ const Sync = (() => {
         return data;
     }
 
+    async function getJoinRequests(groupId) {
+        const session = await Auth.getSession();
+        if (!session) throw new Error('Not logged in.');
+        const res = await fetch(`${GROUP_API}/${groupId}/join-requests`, {
+            headers: Auth.authHeader(session.token),
+            credentials: 'include',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to fetch join requests.');
+        return data.requests || [];
+    }
+
+    async function approveJoinRequest(groupId, requestId) {
+        const session = await Auth.getSession();
+        if (!session) throw new Error('Not logged in.');
+        const res = await fetch(`${GROUP_API}/${groupId}/join-requests/${requestId}/approve`, {
+            method: 'POST',
+            headers: Auth.authHeader(session.token),
+            credentials: 'include',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to approve join request.');
+        return data.group;
+    }
+
+    async function rejectJoinRequest(groupId, requestId) {
+        const session = await Auth.getSession();
+        if (!session) throw new Error('Not logged in.');
+        const res = await fetch(`${GROUP_API}/${groupId}/join-requests/${requestId}/reject`, {
+            method: 'POST',
+            headers: Auth.authHeader(session.token),
+            credentials: 'include',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to reject join request.');
+        return data;
+    }
+
+    async function rotateInviteCode(groupId) {
+        const session = await Auth.getSession();
+        if (!session) throw new Error('Not logged in.');
+        const res = await fetch(`${GROUP_API}/${groupId}/invite-code/rotate`, {
+            method: 'POST',
+            headers: Auth.authHeader(session.token),
+            credentials: 'include',
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to regenerate invite code.');
+        await db.groups.update(groupId, { inviteCode: data.inviteCode, lastActivityAt: new Date() });
+        return data.inviteCode;
+    }
+
+    async function transferAdmin(groupId, newAdminUserId) {
+        const session = await Auth.getSession();
+        if (!session) throw new Error('Not logged in.');
+        const res = await fetch(`${GROUP_API}/${groupId}/transfer-admin`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...Auth.authHeader(session.token) },
+            credentials: 'include',
+            body: JSON.stringify({ newAdminUserId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to transfer admin role.');
+        await db.groups.update(groupId, {
+            adminId: String(data.group.adminId),
+            members: data.group.members,
+            lastActivityAt: data.group.lastActivityAt,
+        });
+        return data.group;
+    }
+
     return {
         syncWithServer, syncGroups, createGroup, joinGroup,
         addExpense, updateSettlementStatus, deleteExpense, getGroupTransactions,
         getPendingCount, getFailedCount, retryFailed,
         isSyncInProgress, getLastSyncTime, checkActualConnectivity,
         getGroupDetail, updateGroup, archiveGroup, removeMember, leaveGroup,
+        getJoinRequests, approveJoinRequest, rejectJoinRequest, rotateInviteCode,
+        transferAdmin,
     };
 })();
 

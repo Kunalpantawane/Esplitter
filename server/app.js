@@ -45,6 +45,7 @@ app.use(globalLimiter);
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.static('public'));
+app.use('/images', express.static('images'));
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -61,24 +62,27 @@ app.get('/api/health', (req, res) => {
 // Connect to MongoDB and start server
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
+const shouldAutoConnect = process.env.NODE_ENV !== 'test';
 
-mongoose
-  .connect(MONGODB_URI)
-  .then(() => {
-    console.log('✅ Connected to MongoDB');
-    // Only listen if executed directly (local dev). Vercel requires exporting the app instead.
-    if (require.main === module) {
-      app.listen(PORT, () => {
-        console.log(`🚀 Server running on http://localhost:${PORT}`);
-      });
-    }
-  })
-  .catch((err) => {
-    console.error('❌ MongoDB connection error:', err.message);
-    if (require.main === module) {
-      process.exit(1);
-    }
-  });
+if (shouldAutoConnect) {
+  mongoose
+    .connect(MONGODB_URI)
+    .then(() => {
+      console.log('✅ Connected to MongoDB');
+      // Only listen if executed directly (local dev). Vercel requires exporting the app instead.
+      if (require.main === module) {
+        app.listen(PORT, () => {
+          console.log(`🚀 Server running on http://localhost:${PORT}`);
+        });
+      }
+    })
+    .catch((err) => {
+      console.error('❌ MongoDB connection error:', err.message);
+      if (require.main === module) {
+        process.exit(1);
+      }
+    });
+}
 
 // Export the Express API for Vercel Serverless
 module.exports = app;
