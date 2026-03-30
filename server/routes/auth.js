@@ -49,7 +49,8 @@ function clearRefreshCookie(res) {
 // POST /api/auth/register
 router.post('/register', authLimiter, async (req, res) => {
     try {
-        const { name, email, password, upiId } = req.body;
+        const { name, email, password } = req.body;
+        const upiId = String(req.body.upiId || '').trim().toLowerCase();
 
         if (!name || !email || !password || !upiId) {
             return res.status(400).json({ error: 'Name, email, password, and UPI ID are required.' });
@@ -63,7 +64,9 @@ router.post('/register', authLimiter, async (req, res) => {
         const upiError = User.validateUpiId(upiId);
         if (upiError) return res.status(400).json({ error: upiError });
 
-        const existing = await User.findOne({ email });
+        const normalizedEmail = String(email).trim().toLowerCase();
+
+        const existing = await User.findOne({ email: normalizedEmail });
         if (existing) {
             return res.status(409).json({ error: 'Email already registered.' });
         }
@@ -74,7 +77,13 @@ router.post('/register', authLimiter, async (req, res) => {
         }
 
         const refreshToken = generateRefreshToken();
-        const user = new User({ name, email, password, upiId, refreshToken });
+        const user = new User({
+            name: String(name).trim(),
+            email: normalizedEmail,
+            password,
+            upiId,
+            refreshToken,
+        });
         await user.save();
 
         const accessToken = generateAccessToken(user._id);

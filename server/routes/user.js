@@ -53,7 +53,7 @@ router.put('/profile', authenticate, async (req, res) => {
 // PUT /api/user/upi-id
 router.put('/upi-id', authenticate, async (req, res) => {
     try {
-        const { upiId } = req.body;
+        const upiId = String(req.body.upiId || '').trim().toLowerCase();
         if (!upiId) return res.status(400).json({ error: 'UPI ID is required.' });
 
         const validationError = User.validateUpiId(upiId);
@@ -61,7 +61,7 @@ router.put('/upi-id', authenticate, async (req, res) => {
 
         const user = await User.findByIdAndUpdate(
             req.userId,
-            { upiId: upiId.trim() },
+            { upiId },
             { new: true }
         ).select('-password -refreshToken');
 

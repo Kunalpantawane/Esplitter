@@ -24,7 +24,17 @@ userSchema.statics.validatePassword = function (password) {
 // UPI ID format validation
 userSchema.statics.validateUpiId = function (upiId) {
     if (!upiId) return 'UPI ID is required.';
-    if (!/^[\w.\-]+@[\w]+$/.test(upiId)) return 'Invalid UPI ID format. Use format: name@bank';
+    const normalized = String(upiId).trim().toLowerCase();
+    if (normalized.length < 6 || normalized.length > 100) {
+        return 'Invalid UPI ID length.';
+    }
+    if (/\s/.test(normalized)) {
+        return 'UPI ID cannot contain spaces.';
+    }
+    // Broad UPI format validation to catch obvious mistakes.
+    if (!/^[a-z0-9._-]{2,}@[a-z][a-z0-9.-]{2,}$/.test(normalized)) {
+        return 'Invalid UPI ID format. Use format: name@bank';
+    }
     return null;
 };
 

@@ -25,6 +25,16 @@ const retryWithBackoff = async (fn, retries = 3) => {
     }
 };
 
+function normalizeUpiId(upiId) {
+    return String(upiId || '').trim().toLowerCase();
+}
+
+function isLikelyValidUpiId(upiId) {
+    const normalized = normalizeUpiId(upiId);
+    if (!normalized || /\s/.test(normalized)) return false;
+    return /^[a-z0-9._-]{2,}@[a-z][a-z0-9.-]{2,}$/.test(normalized);
+}
+
 // ---- App State ----
 let currentSession = null;
 let currentGroup = null;
@@ -352,11 +362,16 @@ document.getElementById('form-register').addEventListener('submit', async (e) =>
     btn.textContent = 'Registering...';
     err.textContent = '';
     try {
+        const regUpi = normalizeUpiId(document.getElementById('reg-upi').value);
+        if (!isLikelyValidUpiId(regUpi)) {
+            throw new Error('Enter a valid UPI ID (example: yourname@bank).');
+        }
+
         await retryWithBackoff(() => Auth.register(
             document.getElementById('reg-name').value.trim(),
             document.getElementById('reg-email').value.trim(),
             document.getElementById('reg-password').value,
-            document.getElementById('reg-upi').value.trim()
+            regUpi
         ));
         currentSession = await Auth.getSession();
         Auth.startAutoRefresh();
@@ -428,7 +443,12 @@ document.getElementById('form-upi').addEventListener('submit', async (e) => {
     const err = document.getElementById('upi-error');
     msg.textContent = ''; err.textContent = '';
     try {
-        await Auth.updateUpiId(document.getElementById('profile-upi').value.trim());
+        const upiId = normalizeUpiId(document.getElementById('profile-upi').value);
+        if (!isLikelyValidUpiId(upiId)) {
+            throw new Error('Enter a valid UPI ID (example: yourname@bank).');
+        }
+
+        await Auth.updateUpiId(upiId);
         currentSession = await Auth.getSession();
         msg.textContent = '✅ UPI ID saved!';
     } catch (ex) {

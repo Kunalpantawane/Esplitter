@@ -5,6 +5,16 @@ const QRPay = (() => {
     let html5QrCode = null;
     let scannedData = null; // { upiId, name, amount, note }
 
+    function normalizeUpiId(upiId) {
+        return String(upiId || '').trim().toLowerCase();
+    }
+
+    function isLikelyValidUpiId(upiId) {
+        const normalized = normalizeUpiId(upiId);
+        if (!normalized || /\s/.test(normalized)) return false;
+        return /^[a-z0-9._-]{2,}@[a-z][a-z0-9.-]{2,}$/.test(normalized);
+    }
+
     // ---- Parse UPI QR string ----
     function parseUPI(text) {
         // Format: upi://pay?pa=user@upi&pn=Name&am=100.00&tn=Note&cu=INR
@@ -14,13 +24,13 @@ const QRPay = (() => {
             // Some QR codes use uppercase UPI://
             if (raw.toLowerCase().startsWith('upi://pay')) {
                 const url = new URL(raw.replace(/^upi:\/\//i, 'https://upi.placeholder/'));
-                result.upiId = url.searchParams.get('pa') || '';
+                result.upiId = normalizeUpiId(url.searchParams.get('pa') || '');
                 result.name = url.searchParams.get('pn') || '';
                 result.amount = url.searchParams.get('am') || '';
                 result.note = url.searchParams.get('tn') || '';
             } else if (raw.includes('@')) {
                 // Plain UPI ID pasted
-                result.upiId = raw;
+                result.upiId = normalizeUpiId(raw);
             }
         } catch (e) {
             console.warn('QRPay: Could not parse UPI string', e);
@@ -34,7 +44,12 @@ const QRPay = (() => {
     // UPI apps (PhonePe, GPay, Paytm) expect the raw '@' in the 'pa' parameter
     // and will often fail or misparse the whole intent if it is encoded.
     function buildUPILink({ upiId, name, amount, note }) {
-        let url = `upi://pay?pa=${upiId}`;
+        const normalizedUpiId = normalizeUpiId(upiId);
+        if (!isLikelyValidUpiId(normalizedUpiId)) {
+            throw new Error('Invalid UPI ID. Please check and try again.');
+        }
+
+        let url = `upi://pay?pa=${normalizedUpiId}`;
         if (name) url += `&pn=${encodeURIComponent(name)}`;
         if (amount) {
             // Some buggy UPI apps misread "1.00" as "100". Pass integers cleanly.
@@ -150,9 +165,9 @@ const QRPay = (() => {
     function showPaymentForm(data) {
         // Keep the latest payment payload in module state so button rendering,
         // copy link, and record flows all use the same source of truth.
-        scannedData = { ...data };
+        scannedData = { ...data, upiId: normalizeUpiId(data.upiId) };
 
-        document.getElementById('pay-upi-id').textContent = data.upiId;
+        document.getElementById('pay-upi-id').textContent = scannedData.upiId;
         document.getElementById('pay-name').textContent = data.name || 'Unknown';
 
         const amtInput = document.getElementById('pay-amount');
@@ -211,15 +226,20 @@ const QRPay = (() => {
     function renderAppButtons() {
         const amount = parseFloat(document.getElementById('pay-amount').value) || 0;
         const note = document.getElementById('pay-note').value.trim();
-        const upiId = scannedData?.upiId || '';
+        const upiId = normalizeUpiId(scannedData?.upiId || '');
         const name = scannedData?.name || '';
+        const container = document.getElementById('upi-app-grid');
 
         if (!upiId) return;
+
+        if (!isLikelyValidUpiId(upiId)) {
+            container.innerHTML = '<div class="qr-status error">Invalid UPI ID. Ask recipient for a valid UPI ID.</div>';
+            return;
+        }
 
         const apps = getPaymentLinks(upiId, amount > 0 ? amount : '', note, name);
         
         // Render mobile buttons
-        const container = document.getElementById('upi-app-grid');
         container.innerHTML = apps.map(app => `
             <button class="upi-app-btn ${app.cls}" data-url="${escapeAttr(app.url)}">
                 <span class="upi-app-icon">${app.icon}</span>
@@ -245,9 +265,15 @@ const QRPay = (() => {
     function copyUPILink() {
         const amount = parseFloat(document.getElementById('pay-amount').value) || 0;
         const note = document.getElementById('pay-note').value.trim();
-        const upiId = scannedData?.upiId || '';
+        const upiId = normalizeUpiId(scannedData?.upiId || '');
         const name = scannedData?.name || '';
-        const link = buildUPILink({ upiId, name, amount, note });
+        let link = '';
+        try {
+            link = buildUPILink({ upiId, name, amount, note });
+        } catch (e) {
+            UI.showToast(e.message || 'Invalid UPI ID', 'warning');
+            return;
+        }
 
         navigator.clipboard.writeText(link).then(() => {
             const btn = document.getElementById('btn-copy-upi');
