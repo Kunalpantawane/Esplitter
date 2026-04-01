@@ -101,7 +101,7 @@ const Sync = (() => {
                 throw new Error(`Server returned ${res.status}`);
             }
 
-            const { synced, errors, serverAdds, serverGroups, syncTime } = await res.json();
+            const { synced, errors, serverAdds, serverGroups, allServerGroupIds, syncTime } = await res.json();
 
             // ---- Process synced items ----
             for (const clientId of (synced || [])) {
@@ -175,24 +175,31 @@ const Sync = (() => {
             // ---- Merge server groups ----
             const serverGroupIds = [];
             for (const g of (serverGroups || [])) {
-                serverGroupIds.push(String(g._id));
+                const gId = String(g._id || g.id);
+                serverGroupIds.push(gId);
                 await db.groups.put({
-                    id: String(g._id),
+                    id: gId,
                     name: g.name,
-                    inviteCode: g.inviteCode,
-                    adminId: String(g.adminId),
-                    members: g.members,
+                    inviteCode: g.inviteCode || '',
+                    adminId: g.adminId ? String(g.adminId) : '',
+                    members: g.members || [],
+                    description: g.description || '',
+                    isArchived: g.isArchived || false,
                     lastActivityAt: g.lastActivityAt,
                 });
             }
 
-            // ---- Cleanup local groups not in serverGroups ----
-            const localGroups = await db.groups.toArray();
-            for (const lg of localGroups) {
-                if (!serverGroupIds.includes(lg.id)) {
-                    await db.groups.delete(lg.id);
-                    // Cascade delete transactions locally
-                    await db.transactions.where('groupId').equals(lg.id).delete();
+            // ---- Cleanup local groups not in the user's server-side group list ----
+            // Use allServerGroupIds (all groups user belongs to) rather than serverGroupIds (only changed ones)
+            const validGroupIds = (allServerGroupIds || []).map(String);
+            if (validGroupIds.length > 0) {
+                const localGroups = await db.groups.toArray();
+                for (const lg of localGroups) {
+                    if (!validGroupIds.includes(lg.id)) {
+                        await db.groups.delete(lg.id);
+                        // Cascade delete transactions locally
+                        await db.transactions.where('groupId').equals(lg.id).delete();
+                    }
                 }
             }
 
@@ -289,16 +296,22 @@ const Sync = (() => {
 
             const { groups } = await res.json();
             for (const g of groups) {
+                const gId = String(g._id || g.id);
                 await db.groups.put({
-                    id: String(g._id),
+                    id: gId,
                     name: g.name,
-                    inviteCode: g.inviteCode,
-                    adminId: String(g.adminId),
-                    members: g.members,
+                    inviteCode: g.inviteCode || '',
+                    adminId: g.adminId ? String(g.adminId) : '',
+                    members: g.members || [],
+                    description: g.description || '',
+                    isArchived: g.isArchived || false,
                     lastActivityAt: g.lastActivityAt,
                 });
             }
-            return groups.map((g) => ({ ...g, id: String(g._id) }));
+            return groups.map((g) => ({
+                ...g,
+                id: String(g._id || g.id),
+            }));
         } catch {
             return db.groups.toArray();
         }
@@ -317,15 +330,18 @@ const Sync = (() => {
         if (!res.ok) throw new Error(data.error);
 
         const g = data.group;
+        const gId = String(g._id || g.id);
         await db.groups.put({
-            id: String(g._id),
+            id: gId,
             name: g.name,
-            inviteCode: g.inviteCode,
-            adminId: String(g.adminId),
+            inviteCode: g.inviteCode || '',
+            adminId: g.adminId ? String(g.adminId) : '',
             members: g.members || [{ _id: session.user.id, name: session.user.name }],
+            description: g.description || '',
+            isArchived: g.isArchived || false,
             lastActivityAt: g.lastActivityAt,
         });
-        return { ...g, id: String(g._id) };
+        return { ...g, id: gId };
     }
 
     async function joinGroup(inviteCode) {
@@ -349,15 +365,18 @@ const Sync = (() => {
         }
 
         const g = data.group;
+        const gId = String(g._id || g.id);
         await db.groups.put({
-            id: String(g._id),
+            id: gId,
             name: g.name,
-            inviteCode: g.inviteCode,
-            adminId: String(g.adminId),
-            members: g.members,
+            inviteCode: g.inviteCode || '',
+            adminId: g.adminId ? String(g.adminId) : '',
+            members: g.members || [],
+            description: g.description || '',
+            isArchived: g.isArchived || false,
             lastActivityAt: g.lastActivityAt,
         });
-        return { ...g, id: String(g._id), pending: false };
+        return { ...g, id: gId, pending: false };
     }
 
     async function addExpense({ groupId, description, amount, paidBy, splits, type, splitType, status }) {

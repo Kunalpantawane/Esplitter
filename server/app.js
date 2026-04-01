@@ -32,14 +32,14 @@ app.use(cors({
   credentials: true, // Allow cookies
 }));
 
-// Global rate limiter — 300 requests per 15 minutes
-const globalLimiter = rateLimit({
+// General API rate limiter — relaxed, 600 requests per 15 minutes
+const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
+  max: 600,
+  message: { error: 'Too many requests. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use(globalLimiter);
 
 // Body parsing & cookies
 app.use(express.json());
@@ -48,11 +48,12 @@ app.use(express.static('public'));
 app.use('/images', express.static('images'));
 
 // Routes
+// Note: /api/auth has its own strict 15req/15min rate limiter defined inside authRoutes
 app.use('/api/auth', authRoutes);
-app.use('/api/sync', syncRoutes);
-app.use('/api/expenses', expenseRoutes);
-app.use('/api/user', userRoutes);
-app.use('/api/groups', groupRoutes);
+app.use('/api/sync', apiLimiter, syncRoutes);
+app.use('/api/expenses', apiLimiter, expenseRoutes);
+app.use('/api/user', apiLimiter, userRoutes);
+app.use('/api/groups', apiLimiter, groupRoutes);
 
 // Health Check
 app.get('/api/health', (req, res) => {

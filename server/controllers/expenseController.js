@@ -256,7 +256,13 @@ async function updateSettlementStatus(req, res) {
 // DELETE /api/expenses/:id - Soft delete expense (admin/creator only, atomic)
 async function deleteExpense(req, res) {
     try {
-        const transaction = await Transaction.findById(req.params.id);
+        // Support both /api/expenses/:id (MongoDB _id) and /api/expenses/client/:clientId (UUID)
+        let transaction;
+        if (req.params.clientId) {
+            transaction = await Transaction.findOne({ clientId: req.params.clientId });
+        } else {
+            transaction = await Transaction.findById(req.params.id);
+        }
         if (!transaction) return res.status(404).json({ error: 'Expense not found.' });
 
         const group = await Group.findById(transaction.groupId);

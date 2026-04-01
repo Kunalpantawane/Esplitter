@@ -107,9 +107,27 @@ async function loadGroups() {
 }
 
 async function openGroup(groupId) {
+    // Use cached group data initially for fast display
     currentGroup = groups.find((g) => (g.id || String(g._id)) === groupId);
     if (!currentGroup) return;
     UI.showScreen('screen-group');
+
+    // Fetch full group detail from server (with populated members) for accurate data
+    try {
+        if (navigator.onLine) {
+            const fullGroup = await Sync.getGroupDetail(groupId);
+            if (fullGroup) {
+                currentGroup = { ...fullGroup, id: String(fullGroup._id || fullGroup.id || groupId) };
+                // Also update in our groups array
+                const idx = groups.findIndex(g => (g.id || String(g._id)) === groupId);
+                if (idx !== -1) groups[idx] = currentGroup;
+            }
+        }
+    } catch (err) {
+        // If fetch fails (offline/error), continue with cached data
+        console.warn('[openGroup] Failed to fetch full group detail:', err.message);
+    }
+
     await UI.renderGroupDetail(currentGroup, currentSession);
 }
 
@@ -134,9 +152,6 @@ async function doSync() {
         await loadGroups();
         if (currentGroup) await UI.renderGroupDetail(currentGroup, currentSession);
     }
-    
-    // Reschedule smarter interval
-    scheduleSmarterSync();
 }
 
 const handleManualSync = debounce(async () => {
@@ -150,7 +165,7 @@ const handleManualSync = debounce(async () => {
     }
 }, 1000);
 
-// ---- Network ----
+// ---- Network & Visibility ----
 function setupNetworkListeners() {
     window.addEventListener('online', async () => { 
         UI.setNetworkBanner(true); 
@@ -161,17 +176,12 @@ function setupNetworkListeners() {
     });
     if (!navigator.onLine) UI.setNetworkBanner(false);
 
-    // Initial scheduler start
-    scheduleSmarterSync();
-}
-
-async function scheduleSmarterSync() {
-    if (_syncIntervalId) clearInterval(_syncIntervalId);
-    
-    // Poll every 10 seconds (controlled real-time feel)
-    const intervalMs = 10 * 1000;
-    
-    _syncIntervalId = setInterval(doSync, intervalMs);
+    // Sync when user tabs back into the app
+    document.addEventListener('visibilitychange', async () => {
+        if (document.visibilityState === 'visible' && navigator.onLine) {
+            await doSync();
+        }
+    });
 }
 
 // ---- Service Worker ----

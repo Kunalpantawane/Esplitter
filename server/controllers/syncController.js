@@ -62,7 +62,7 @@ async function syncTransactions(req, res) {
 
         // PULL PHASE: Fetch user's groups (minimal data)
         const userGroups = await Group.find({ members: req.userId })
-            .select('_id name lastActivityAt')
+            .populate('members', 'name email upiId')
             .lean();
         
         const allGroupIds = userGroups.map((g) => g._id);
@@ -88,15 +88,19 @@ async function syncTransactions(req, res) {
         // Only include groups that changed since last sync
         const changedGroups = userGroups.filter(g => {
             return !lastSyncAt || new Date(g.lastActivityAt) > since;
-        });
+        }).map(g => ({ ...g, id: String(g._id) }));
 
         const hasMore = serverAdds.length === pullLimit;
+
+        // Also return the full list of group IDs so frontend knows which groups are still valid
+        const allServerGroupIds = userGroups.map(g => String(g._id));
 
         res.json({
             synced: results,
             errors,
             serverAdds,
             serverGroups: changedGroups,
+            allServerGroupIds,
             syncTime: new Date().toISOString(),
             hasMore,
             pullGroupIds,
@@ -135,7 +139,8 @@ async function syncGroupAction(req, res) {
                 idempotency.setCached(idempotencyKey, req.userId, group._doc || group.toObject());
             }
             
-            return res.status(201).json({ group });
+            const groupObj = group._doc || group.toObject();
+            return res.status(201).json({ group: { ...groupObj, id: String(group._id) } });
         }
 
         if (action === 'join') {
@@ -178,9 +183,9 @@ async function syncGroupAction(req, res) {
 async function getUserGroups(req, res) {
     try {
         const groups = await Group.find({ members: req.userId })
-            .select('_id name lastActivityAt')
+            .populate('members', 'name email upiId')
             .lean();
-        res.json({ groups });
+        res.json({ groups: groups.map(g => ({ ...g, id: String(g._id) })) });
     } catch (err) {
         res.status(500).json({ error: 'Failed to fetch groups.' });
     }

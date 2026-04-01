@@ -31,7 +31,7 @@ function setRefreshCookie(res, token) {
     res.cookie('refreshToken', token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        sameSite: 'lax',
         maxAge: REFRESH_EXPIRY_MS,
         path: '/api/auth',
     });
@@ -41,7 +41,7 @@ function clearRefreshCookie(res) {
     res.clearCookie('refreshToken', {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
-        sameSite: 'strict',
+        sameSite: 'lax',
         path: '/api/auth',
     });
 }
@@ -107,7 +107,8 @@ router.post('/login', authLimiter, async (req, res) => {
             return res.status(400).json({ error: 'Email and password are required.' });
         }
 
-        const user = await User.findOne({ email });
+        const normalizedEmail = String(email).trim().toLowerCase();
+        const user = await User.findOne({ email: normalizedEmail });
         if (!user) {
             return res.status(401).json({ error: 'Invalid credentials.' });
         }
