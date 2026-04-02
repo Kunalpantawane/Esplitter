@@ -23,8 +23,7 @@ const UI = (() => {
     }
 
     // ---- Button Ripple Effect ----
-    function addRipple(e) {
-        const btn = e.currentTarget;
+    function addRipple(e, btn) {
         const ripple = document.createElement('span');
         ripple.className = 'ripple';
         const rect = btn.getBoundingClientRect();
@@ -39,7 +38,7 @@ const UI = (() => {
     // Attach ripple to all buttons
     document.addEventListener('click', (e) => {
         const btn = e.target.closest('.btn, .btn-primary, .btn-secondary');
-        if (btn) addRipple(e);
+        if (btn) addRipple(e, btn);
     });
 
     // ---- Balance cache ----

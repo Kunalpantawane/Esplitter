@@ -28,7 +28,8 @@ router.put('/profile', authenticate, async (req, res) => {
         const update = {};
 
         if (name && name.trim()) update.name = name.trim();
-        if (phone !== undefined) update.phone = phone.trim();
+        // Fix 8: Coerce to string before trim to avoid 500 on non-string phone values
+        if (phone !== undefined) update.phone = String(phone || '').trim();
 
         if (Object.keys(update).length === 0) {
             return res.status(400).json({ error: 'No fields to update.' });

@@ -86,6 +86,7 @@ const Sync = (() => {
                 type: tx.type || 'EXPENSE',
                 splitType: tx.splitType || 'EQUAL',
                 status: tx.status || (tx.type === 'PAYMENT' ? 'PENDING' : 'PAID'),
+                deleted: tx.deleted || false,
             }));
 
             const res = await fetch(API, {
@@ -191,8 +192,9 @@ const Sync = (() => {
 
             // ---- Cleanup local groups not in the user's server-side group list ----
             // Use allServerGroupIds (all groups user belongs to) rather than serverGroupIds (only changed ones)
-            const validGroupIds = (allServerGroupIds || []).map(String);
-            if (validGroupIds.length > 0) {
+            // Run even when server returns zero groups (user left/was removed from all groups)
+            if (allServerGroupIds) {
+                const validGroupIds = allServerGroupIds.map(String);
                 const localGroups = await db.groups.toArray();
                 for (const lg of localGroups) {
                     if (!validGroupIds.includes(lg.id)) {
@@ -390,7 +392,8 @@ const Sync = (() => {
             splits,
             type: type || 'EXPENSE',
             splitType: splitType || 'EQUAL',
-            status: type === 'PAYMENT' ? 'PENDING' : 'PAID', // Defaults
+            // Respect explicit caller status; fall back to sensible defaults
+            status: status || (type === 'PAYMENT' ? 'PENDING' : 'PAID'),
             syncStatus: 'PENDING',
             retryCount: 0,
             createdAt: new Date().toISOString(),
@@ -401,51 +404,69 @@ const Sync = (() => {
     }
 
     async function deleteExpense(clientId) {
-        // Delete locally first
-        await db.transactions.delete(clientId);
+        const existing = await db.transactions.get(clientId);
+        if (!existing) return;
+
+        // Mark as deleted tombstone with PENDING sync status so it gets pushed offline too
+        await db.transactions.update(clientId, { deleted: true, syncStatus: 'PENDING' });
         UI.invalidateBalanceCache();
 
-        // Push deletion to server using unique clientId
+        // Try immediate push if online
         if (navigator.onLine) {
             try {
                 const session = await Auth.getSession();
                 if (!session) return;
-                await fetch(`/api/expenses/client/${clientId}`, {
+                const res = await fetch(`/api/expenses/client/${clientId}`, {
                     method: 'DELETE',
                     headers: Auth.authHeader(session.token),
                 });
+                if (res.ok) {
+                    // Server confirmed deletion — remove tombstone locally
+                    await db.transactions.delete(clientId);
+                }
+                // If !res.ok, tombstone stays PENDING → next sync will retry
             } catch (err) {
                 console.warn('Failed to delete from server:', err.message);
+                // Tombstone stays PENDING → will be pushed on next sync
             }
         }
+        // If offline, tombstone stays PENDING → normal sync will push it
     }
 
     async function updateSettlementStatus(clientId, serverId, status) {
-        // Update locally
-        await db.transactions.update(clientId, { status });
+        // Update locally and mark PENDING so offline changes are synced
+        await db.transactions.update(clientId, { status, syncStatus: 'PENDING' });
         UI.invalidateBalanceCache();
 
-        // Push to server if online and we have serverId
+        // Try immediate push if online and we have a server ID
         if (navigator.onLine && serverId) {
             try {
                 const session = await Auth.getSession();
                 if (!session) return;
-                await fetch(`/api/expenses/${serverId}/settle-status`, {
+                const res = await fetch(`/api/expenses/${serverId}/settle-status`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json', ...Auth.authHeader(session.token) },
                     body: JSON.stringify({ status })
                 });
+                if (res.ok) {
+                    // Server confirmed — mark as synced
+                    await db.transactions.update(clientId, { syncStatus: 'SYNCED' });
+                }
+                // If !res.ok, syncStatus stays PENDING → next sync will retry
             } catch (err) {
                 console.warn('Failed to update status on server:', err.message);
-                // In a perfect offline-first world, we would queue this state change.
-                // For simplicity, we just rely on the next full sync or a manual retry if it was critical.
+                // syncStatus stays PENDING → will be picked up by next sync
             }
         }
+        // If offline, syncStatus is PENDING → normal syncWithServer will push it
     }
 
     async function getGroupTransactions(groupId) {
         const all = await db.transactions.where('groupId').equals(groupId).toArray();
-        return all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        // Filter out local tombstones (deleted=true pending server confirmation)
+        return all
+            .filter(tx => !tx.deleted)
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     }
 
     async function getPendingCount() {

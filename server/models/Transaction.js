@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 
 const splitSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    amount: { type: Number, required: true },
+    // Fix 10: Reject negative split amounts at the schema level
+    amount: { type: Number, required: true, min: [0, 'Split amount cannot be negative'] },
 });
 
 const transactionSchema = new mongoose.Schema(
@@ -10,7 +11,8 @@ const transactionSchema = new mongoose.Schema(
         clientId: { type: String, required: true, unique: true }, // UUID from client (for deduplication)
         groupId: { type: mongoose.Schema.Types.ObjectId, ref: 'Group', required: true },
         description: { type: String, required: true, trim: true },
-        amount: { type: Number, required: true },
+        // Fix 10: Reject zero or negative amounts at the schema level
+        amount: { type: Number, required: true, min: [0.01, 'Amount must be greater than zero'] },
         paidBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
         receiverId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // For PAYMENT type
         splits: [splitSchema],

@@ -189,7 +189,8 @@ async function updateGroup(req, res) {
 
         const { name, description } = req.body;
         if (name && name.trim()) group.name = name.trim();
-        if (description !== undefined) group.description = description.trim();
+        // Fix 8: Coerce to string before trim to avoid 500 on non-string inputs
+        if (description !== undefined) group.description = String(description || '').trim();
         group.lastActivityAt = new Date();
         await group.save();
 

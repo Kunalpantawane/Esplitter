@@ -23,13 +23,24 @@ app.use(helmet({
   contentSecurityPolicy: false, // Disable CSP for now (inline scripts used)
 }));
 
-// CORS — dynamically allow origins for Vercel
+// CORS — explicit origin allowlist (open reflection + credentials is a security risk)
+// Set CORS_ORIGINS in your .env / Vercel dashboard as a comma-separated list of allowed origins.
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
 app.use(cors({
   origin: function (origin, callback) {
-    // Reflect the requesting origin back dynamically to support Vercel preview domains
-    callback(null, origin || true);
+    // Allow requests with no Origin header (server-to-server, mobile apps, curl)
+    if (!origin) return callback(null, true);
+    // Allow explicit allowlist
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, origin);
+    // Allow any Vercel preview deployment automatically
+    if (/^https:\/\/[^.]+\.vercel\.app$/.test(origin)) return callback(null, origin);
+    callback(new Error('Not allowed by CORS'));
   },
-  credentials: true, // Allow cookies
+  credentials: true, // Allow cookies / Authorization headers
 }));
 
 // General API rate limiter — relaxed, 600 requests per 15 minutes

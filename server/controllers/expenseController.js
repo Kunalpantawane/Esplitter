@@ -117,6 +117,11 @@ async function createExpense(req, res) {
             return res.status(403).json({ error: 'You are not a member of this group.' });
         }
 
+        // Fix 5: Block writes to archived groups
+        if (group.isArchived) {
+            return res.status(403).json({ error: 'Cannot add expenses to an archived group.' });
+        }
+
         if (!memberIds.includes(String(paidBy))) {
             return res.status(400).json({ error: 'Payer must be a group member.' });
         }

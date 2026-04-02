@@ -14,9 +14,28 @@ async function syncTransactions(req, res) {
         // PUSH PHASE: Send pending transactions
         for (const tx of pending) {
             try {
+                // Fix 10: Validate required payload fields before any DB work
+                if (!tx.clientId || !tx.groupId || !tx.paidBy) {
+                    errors.push({ clientId: tx.clientId || 'unknown', error: 'Missing required fields (clientId, groupId, paidBy).' });
+                    continue;
+                }
+                if (typeof tx.amount !== 'number' || tx.amount <= 0) {
+                    // Allow deleted tombstones to pass through without an amount
+                    if (!tx.deleted) {
+                        errors.push({ clientId: tx.clientId, error: 'Amount must be a positive number.' });
+                        continue;
+                    }
+                }
+
                 const group = await Group.findById(tx.groupId);
                 if (!group || !group.members.map(String).includes(String(req.userId))) {
                     errors.push({ clientId: tx.clientId, error: 'Access denied to group.' });
+                    continue;
+                }
+
+                // Fix 5: Block writes to archived groups
+                if (group.isArchived) {
+                    errors.push({ clientId: tx.clientId, error: 'Group is archived. No new transactions allowed.' });
                     continue;
                 }
 
@@ -48,6 +67,8 @@ async function syncTransactions(req, res) {
                             splitType: tx.splitType || 'EQUAL',
                             type: tx.type || 'EXPENSE',
                             status: tx.status || (tx.type === 'PAYMENT' ? 'PENDING' : 'PAID'),
+                            // Fix 2/3: Persist deleted flag from client so tombstones are stored
+                            deleted: tx.deleted || false,
                             syncedAt: new Date(),
                         },
                         { upsert: true, new: true, ...options }
@@ -80,7 +101,7 @@ async function syncTransactions(req, res) {
             groupId: { $in: pullGroupIds },
             syncedAt: { $gt: since },
         })
-            .select('clientId groupId description amount paidBy splits type status syncedAt')
+            .select('clientId groupId description amount paidBy splits type status syncedAt deleted createdAt')
             .sort({ syncedAt: -1 })
             .limit(pullLimit)
             .lean();
@@ -144,6 +165,10 @@ async function syncGroupAction(req, res) {
         }
 
         if (action === 'join') {
+            // Fix 8: Guard missing/non-string inviteCode before calling .toUpperCase()
+            if (!inviteCode || typeof inviteCode !== 'string') {
+                return res.status(400).json({ error: 'Invite code is required.' });
+            }
             const group = await Group.findOne({ inviteCode: inviteCode.toUpperCase() });
             if (!group) return res.status(404).json({ error: 'Group not found.' });
 
