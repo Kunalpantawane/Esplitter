@@ -2,6 +2,9 @@ const Group = require('../models/Group');
 const Transaction = require('../models/Transaction');
 const { computeGroupBalances } = require('../services/balanceService');
 const runAtomic = require('../lib/runAtomic');
+const crypto = require('crypto');
+const { getRazorpayClient, getRazorpayKeyId } = require('../lib/razorpay');
+const paymentService = require('../services/paymentService');
 
 function isGroupMember(group, userId) {
     return group.members.map(String).includes(String(userId));
@@ -29,7 +32,8 @@ async function listExpenses(req, res) {
         const filter = { groupId: req.params.groupId, deleted: { $ne: true } };
 
         if (req.query.search) {
-            filter.description = { $regex: req.query.search, $options: 'i' };
+            const escapedSearch = req.query.search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            filter.description = { $regex: escapedSearch, $options: 'i' };
         }
         if (req.query.payerId) {
             filter.paidBy = req.query.payerId;
@@ -228,7 +232,13 @@ async function updateSettlementStatus(req, res) {
         }
 
         const debtorId = String(transaction.paidBy);
-        const creditorId = transaction.splits && transaction.splits.length > 0 ? String(transaction.splits[0].userId) : String(transaction.receiverId);
+        const creditorId = transaction.splits && transaction.splits.length > 0
+            ? String(transaction.splits[0].userId)
+            : (transaction.receiverId ? String(transaction.receiverId) : null);
+
+        if (!creditorId) {
+            return res.status(400).json({ error: 'Cannot determine creditor for this payment.' });
+        }
 
         if (status === 'PAID' && String(req.userId) !== debtorId) {
             return res.status(403).json({ error: 'Only the debtor can mark as PAID.' });
@@ -297,7 +307,11 @@ async function deleteExpense(req, res) {
 // GET /api/expenses/:groupId/balances - Derive pairwise balances
 async function getGroupBalances(req, res) {
     try {
-        const derived = await computeGroupBalances(req.params.groupId);
+        // Pass raw query mode; computeGroupBalances resolves: query.mode || group.settlementMode || 'smart'
+            const mode = req.query.mode === 'normal' || req.query.mode === 'smart'
+                ? req.query.mode
+                : undefined;
+        const derived = await computeGroupBalances(req.params.groupId, { mode });
         if (!derived) return res.status(404).json({ error: 'Group not found.' });
         if (!derived.group.members.map(m => String(m._id)).includes(String(req.userId))) {
             return res.status(403).json({ error: 'You are not a member of this group.' });
@@ -318,9 +332,125 @@ async function getGroupBalances(req, res) {
             pairwiseDebts: derived.pairwiseDebts,
             memberCount: derived.memberCount,
             isSettled: derived.isSettled,
+            mode: derived.mode,
         });
     } catch (err) {
         res.status(500).json({ error: 'Failed to compute balances.' });
+    }
+}
+
+async function createRazorpayOrder(req, res) {
+    try {
+        const {
+            groupId,
+            amount,
+            debtorId,
+            creditorId,
+            clientId,
+            description,
+        } = req.body;
+
+        if (String(req.userId) !== String(debtorId)) {
+            return res.status(403).json({ error: 'You can only create an order for your own settlement.' });
+        }
+
+        const result = await paymentService.createRazorpayOrder({
+            groupId,
+            amount,
+            debtorId,
+            creditorId,
+            clientId,
+            description,
+        });
+
+        return res.status(201).json(result);
+    } catch (err) {
+        if (err.status) {
+            return res.status(err.status).json({ error: err.message });
+        }
+        return res.status(500).json({ error: 'Failed to create Razorpay order.' });
+    }
+}
+
+async function handleRazorpayWebhook(req, res) {
+    try {
+        const signature = req.header('x-razorpay-signature');
+        if (!signature) {
+            return res.status(400).json({ error: 'Missing Razorpay signature.' });
+        }
+
+        const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+        if (!webhookSecret) {
+            return res.status(503).json({ error: 'Razorpay webhook is not configured.' });
+        }
+
+        const rawBody = req.rawBody;
+        if (!rawBody || !Buffer.isBuffer(rawBody)) {
+            return res.status(400).json({ error: 'Raw webhook body is required.' });
+        }
+
+        const expectedSignature = crypto
+            .createHmac('sha256', webhookSecret)
+            .update(rawBody)
+            .digest('hex');
+
+        if (expectedSignature !== signature) {
+            return res.status(401).json({ error: 'Invalid Razorpay signature.' });
+        }
+
+        const event = req.body || {};
+        const result = await paymentService.handleWebhookEvent(event, signature);
+
+        return res.status(200).json({ received: true, ...result });
+    } catch (err) {
+        console.error('[Razorpay Webhook] Failed:', err.message);
+        return res.status(500).json({ error: 'Webhook processing failed.' });
+    }
+}
+
+async function getPaymentStatus(req, res) {
+    try {
+        const { clientId } = req.params;
+        if (!clientId) {
+            return res.status(400).json({ error: 'Client ID is required.' });
+        }
+
+        const status = await paymentService.getPaymentStatus(clientId);
+        if (!status) {
+            return res.status(404).json({ error: 'Payment record not found.' });
+        }
+
+        res.json(status);
+    } catch (err) {
+        console.error('[Get Payment Status] Failed:', err.message);
+        res.status(500).json({ error: 'Failed to fetch payment status.' });
+    }
+}
+
+async function verifyPayment(req, res) {
+    try {
+        const { clientId } = req.params;
+        if (!clientId) {
+            return res.status(400).json({ error: 'Client ID is required.' });
+        }
+
+        const status = await paymentService.getPaymentStatus(clientId);
+        if (!status) {
+            return res.status(404).json({ error: 'Payment record not found.' });
+        }
+
+        if (!status.paymentRecord.razorpayPaymentId) {
+            return res.status(400).json({ error: 'Payment ID not available for verification.' });
+        }
+
+        const result = await paymentService.reconcilePayment(status.paymentRecord.id);
+        res.json(result);
+    } catch (err) {
+        if (err.status) {
+            return res.status(err.status).json({ error: err.message });
+        }
+        console.error('[Verify Payment] Failed:', err.message);
+        res.status(500).json({ error: 'Failed to verify payment.' });
     }
 }
 
@@ -332,4 +462,8 @@ module.exports = {
     updateSettlementStatus,
     deleteExpense,
     getGroupBalances,
+    createRazorpayOrder,
+    handleRazorpayWebhook,
+    getPaymentStatus,
+    verifyPayment,
 };

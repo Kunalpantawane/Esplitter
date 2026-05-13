@@ -37,47 +37,7 @@ function simplifyDebts(netByUserId) {
     return pairwiseDebts;
 }
 
-async function computeGroupBalances(groupId) {
-    const group = await Group.findById(groupId)
-        .populate('members', 'name email')
-        .lean();
-
-    if (!group) return null;
-
-    const [aggregation] = await Transaction.aggregate([
-        {
-            $match: {
-                groupId: group._id,
-                deleted: { $ne: true },
-                $or: [
-                    { type: { $ne: 'PAYMENT' } },
-                    { status: { $ne: 'PENDING' } },
-                ],
-            },
-        },
-        {
-            $facet: {
-                paid: [
-                    {
-                        $group: {
-                            _id: '$paidBy',
-                            moneyPaid: { $sum: '$amount' },
-                        },
-                    },
-                ],
-                owed: [
-                    { $unwind: '$splits' },
-                    {
-                        $group: {
-                            _id: '$splits.userId',
-                            moneyOwed: { $sum: '$splits.amount' },
-                        },
-                    },
-                ],
-            },
-        },
-    ]);
-
+function buildBalanceMap(group) {
     const balances = {};
     const netByUserId = {};
 
@@ -92,21 +52,127 @@ async function computeGroupBalances(groupId) {
         netByUserId[memberId] = 0;
     });
 
-    (aggregation?.paid || []).forEach((row) => {
-        const memberId = String(row._id);
-        if (!balances[memberId]) return;
-        const paid = Number(row.moneyPaid) || 0;
-        balances[memberId].moneyPaid += paid;
-        netByUserId[memberId] += paid;
-    });
+    return { balances, netByUserId };
+}
 
-    (aggregation?.owed || []).forEach((row) => {
-        const memberId = String(row._id);
-        if (!balances[memberId]) return;
-        const owed = Number(row.moneyOwed) || 0;
+function applyTransactionToBalances(tx, balances, netByUserId) {
+    const amount = Number(tx.amount) || 0;
+    const payerId = String(tx.paidBy);
+
+    if (balances[payerId]) {
+        balances[payerId].moneyPaid += amount;
+        netByUserId[payerId] += amount;
+    }
+
+    if ((tx.type || 'EXPENSE') === 'PAYMENT') {
+        const creditorId = tx.splits && tx.splits.length > 0
+            ? String(tx.splits[0].userId)
+            : (tx.receiverId ? String(tx.receiverId) : null);
+
+        if (creditorId && balances[creditorId]) {
+            balances[creditorId].moneyOwed += amount;
+            netByUserId[creditorId] -= amount;
+        }
+        return;
+    }
+
+    for (const split of (tx.splits || [])) {
+        const memberId = String(split.userId);
+        const owed = Number(split.amount) || 0;
+        if (!balances[memberId]) continue;
         balances[memberId].moneyOwed += owed;
         netByUserId[memberId] -= owed;
-    });
+    }
+}
+
+function buildNormalPairwiseDebts(transactions, userIds = []) {
+    const owes = {};
+
+    const addDebt = (from, to, amount) => {
+        if (!from || !to || amount <= 0.01) return;
+        owes[from] = owes[from] || {};
+        owes[from][to] = (owes[from][to] || 0) + amount;
+    };
+
+    for (const tx of transactions) {
+        const amount = Number(tx.amount) || 0;
+        const payerId = String(tx.paidBy);
+
+        if ((tx.type || 'EXPENSE') === 'PAYMENT') {
+            const creditorId = tx.splits && tx.splits.length > 0
+                ? String(tx.splits[0].userId)
+                : (tx.receiverId ? String(tx.receiverId) : null);
+            if (creditorId && creditorId !== payerId) {
+                addDebt(payerId, creditorId, amount);
+            }
+            continue;
+        }
+
+        for (const split of (tx.splits || [])) {
+            const memberId = String(split.userId);
+            const owed = Number(split.amount) || 0;
+            if (!memberId || memberId === payerId || owed <= 0.01) continue;
+            addDebt(memberId, payerId, owed);
+        }
+    }
+
+    const allUserIds = Array.from(new Set([
+        ...userIds.map(String),
+        ...Object.keys(owes),
+    ])).sort();
+    const pairwiseDebts = [];
+    const seen = new Set();
+
+    for (let i = 0; i < allUserIds.length; i += 1) {
+        for (let j = i + 1; j < allUserIds.length; j += 1) {
+            const a = allUserIds[i];
+            const b = allUserIds[j];
+            const key = `${a}:${b}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            const aToB = (owes[a] && owes[a][b]) || 0;
+            const bToA = (owes[b] && owes[b][a]) || 0;
+            const net = +(aToB - bToA).toFixed(2);
+
+            if (net > 0.01) {
+                pairwiseDebts.push({ from: a, to: b, amount: net });
+            } else if (net < -0.01) {
+                pairwiseDebts.push({ from: b, to: a, amount: +Math.abs(net).toFixed(2) });
+            }
+        }
+    }
+
+    return pairwiseDebts.sort((left, right) => right.amount - left.amount);
+}
+
+async function computeGroupBalances(groupId, options = {}) {
+    const group = await Group.findById(groupId)
+        .populate('members', 'name email')
+        .lean();
+
+    if (!group) return null;
+
+    const mode = (options.mode === 'normal' || options.mode === 'smart')
+        ? options.mode
+        : (group.settlementMode || 'smart');
+
+    const transactions = await Transaction.find({
+        groupId: group._id,
+        deleted: { $ne: true },
+        $or: [
+            { type: { $ne: 'PAYMENT' } },
+            { status: { $ne: 'PENDING' } },
+        ],
+    })
+        .select('paidBy amount splits type status receiverId')
+        .lean();
+
+    const { balances, netByUserId } = buildBalanceMap(group);
+
+    for (const tx of transactions) {
+        applyTransactionToBalances(tx, balances, netByUserId);
+    }
 
     Object.keys(balances).forEach((memberId) => {
         const paid = balances[memberId].moneyPaid;
@@ -116,7 +182,9 @@ async function computeGroupBalances(groupId) {
         balances[memberId].balance = +(paid - owed).toFixed(2);
     });
 
-    const pairwiseDebts = simplifyDebts(netByUserId);
+    const pairwiseDebts = mode === 'normal'
+        ? buildNormalPairwiseDebts(transactions, Object.keys(balances))
+        : simplifyDebts(netByUserId);
     const isSettled = Object.values(balances).every((entry) => Math.abs(entry.balance) < 0.01);
 
     return {
@@ -125,6 +193,7 @@ async function computeGroupBalances(groupId) {
         pairwiseDebts,
         memberCount: (group.members || []).length,
         isSettled,
+        mode,
     };
 }
 

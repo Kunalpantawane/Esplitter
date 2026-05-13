@@ -1,7 +1,7 @@
 // sw.js - Service Worker for offline caching
 
 // Bump version when app shell changes to force cache refresh on all clients
-const CACHE_NAME = 'esplitter-v2';
+const CACHE_NAME = 'esplitter-v4';
 
 // Local-only resources that MUST be cached for the app to work offline.
 // Do NOT include external CDN URLs here — a single network failure during install
@@ -15,14 +15,15 @@ const APP_SHELL = [
     '/js/auth.js',
     '/js/sync.js',
     '/js/ui.js',
-    '/js/qrpay.js',
+    '/js/tracker.js',
+    '/js/tracker-ui.js',
 ];
 
 // CDN resources we try to cache but won't fail install if unavailable
 const CDN_SHELL = [
     'https://unpkg.com/dexie@3/dist/dexie.js',
-    'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js',
-    'https://unpkg.com/qrcode@1.5.3/build/qrcode.min.js',
+    'https://checkout.razorpay.com/v1/checkout.js',
+    'https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js',
 ];
 
 // Install: pre-cache app shell

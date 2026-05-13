@@ -35,6 +35,13 @@ function isLikelyValidUpiId(upiId) {
     return /^[a-z0-9._-]{2,}@[a-z][a-z0-9.-]{2,}$/.test(normalized);
 }
 
+function createClientId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+    }
+    return `client_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
 // ---- App State ----
 let currentSession = null;
 let currentGroup = null;
@@ -320,6 +327,106 @@ function calculateCurrentSplits(amount) {
     }
 
     return [];
+}
+
+async function openRazorpaySettlement(btn) {
+    if (!currentGroup || !currentSession) return;
+
+    const debtorId = currentSession.user.id;
+    const creditorId = btn.dataset.to;
+    const amount = parseFloat(btn.dataset.amt);
+    const groupId = btn.dataset.group || currentGroup.id || String(currentGroup._id);
+    const clientId = btn.dataset.clientId || createClientId();
+    const originalText = btn.textContent;
+
+    if (!creditorId || !amount || amount <= 0) {
+        UI.showToast('Invalid settlement details.', 'error');
+        return;
+    }
+
+    if (typeof Razorpay === 'undefined') {
+        UI.showToast('Payment checkout is unavailable.', 'error');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Opening...';
+
+    const restoreButton = () => {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    };
+
+    try {
+        const res = await fetch('/api/expenses/razorpay/order', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...Auth.authHeader(currentSession.token),
+            },
+            body: JSON.stringify({
+                groupId,
+                amount,
+                debtorId,
+                creditorId,
+                clientId,
+                description: `Settlement with ${btn.dataset.toName || 'member'}`,
+            }),
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error || 'Failed to create checkout order.');
+        }
+
+        const checkout = new Razorpay({
+            key: data.keyId,
+            amount: data.amount,
+            currency: data.currency || 'INR',
+            name: 'Esplitter',
+            description: `Settlement with ${btn.dataset.toName || 'member'}`,
+            order_id: data.order_id,
+            prefill: {
+                name: currentSession.user.name || '',
+                email: currentSession.user.email || '',
+            },
+            notes: {
+                groupId,
+                debtorId,
+                creditorId,
+                clientId,
+            },
+            theme: {
+                color: '#0f8f6f',
+            },
+            handler: async () => {
+                UI.showToast('Payment successful. Waiting for confirmation...', 'success');
+                await doSync();
+                if (currentGroup && currentSession) {
+                    await UI.renderGroupDetail(currentGroup, currentSession);
+                }
+                setTimeout(() => {
+                    if (navigator.onLine) doSync();
+                }, 1500);
+                restoreButton();
+            },
+            modal: {
+                ondismiss: () => {
+                    UI.showToast('Payment cancelled.', 'info');
+                    restoreButton();
+                },
+            },
+        });
+
+        checkout.on('payment.failed', () => {
+            UI.showToast('Payment failed.', 'error');
+            restoreButton();
+        });
+        checkout.open();
+    } catch (ex) {
+        UI.showToast('Failed to start payment: ' + ex.message, 'error');
+        restoreButton();
+    }
 }
 
 // ============ Event Listeners ============
@@ -845,8 +952,26 @@ document.getElementById('btn-delete-expense').addEventListener('click', async ()
 document.getElementById('btn-manual-sync').addEventListener('click', handleManualSync);
 
 // Settlement — delegate clicks on settle buttons
-let pendingSettle = null;
-document.getElementById('settlement-section').addEventListener('click', async (e) => {
+const settlementSection = document.getElementById('settlement-section');
+settlementSection.addEventListener('change', async (e) => {
+    const toggle = e.target.closest('input[data-settlement-mode]');
+    if (!toggle || !currentGroup || !currentSession) return;
+    const newMode = toggle.checked ? 'smart' : 'normal';
+    try {
+        const groupId = currentGroup.id || String(currentGroup._id);
+        await Sync.updateSettlementMode(groupId, newMode);
+        currentGroup.settlementMode = newMode;
+        UI.setSettlementMode(newMode);
+        await UI.renderGroupDetail(currentGroup, currentSession);
+        UI.showToast(`Settlement mode changed to ${newMode}.`, 'success');
+    } catch (ex) {
+        // Revert toggle on failure
+        toggle.checked = !toggle.checked;
+        UI.showToast('Failed to update settlement mode: ' + ex.message, 'error');
+    }
+});
+
+settlementSection.addEventListener('click', async (e) => {
     // 1. Request Payment (Creditor creates a PENDING payment)
     if (e.target.closest('.btn-request-payment')) {
         const btn = e.target.closest('.btn-request-payment');
@@ -868,36 +993,10 @@ document.getElementById('settlement-section').addEventListener('click', async (e
         return;
     }
 
-    // 2. Pay Now via UPI (Debtor pays)
+    // 2. Pay Now via Razorpay (Debtor pays)
     if (e.target.closest('.btn-pay-now')) {
         const btn = e.target.closest('.btn-pay-now');
-        pendingSettle = {
-            groupId: btn.dataset.group,
-            toUserId: btn.dataset.to,
-            toUserName: btn.dataset.toName,
-            amount: parseFloat(btn.dataset.amt),
-            upiId: btn.dataset.upi,
-            clientId: btn.dataset.clientId || null,
-            serverId: btn.dataset.txId || null
-        };
-        
-        if (pendingSettle.upiId) {
-            const payload = {
-                upiId: pendingSettle.upiId,
-                name: pendingSettle.toUserName,
-                amount: pendingSettle.amount,
-                note: 'Group Settlement',
-                settleContext: {
-                    groupId: pendingSettle.groupId,
-                    toUserId: pendingSettle.toUserId,
-                    clientId: pendingSettle.clientId,
-                    serverId: pendingSettle.serverId
-                }
-            };
-            QRPay.showPaymentForm(payload);
-        } else {
-            UI.showToast("This user hasn't set up their UPI ID.", 'warning');
-        }
+        await openRazorpaySettlement(btn);
         return;
     }
 
@@ -930,16 +1029,9 @@ document.getElementById('settlement-section').addEventListener('click', async (e
     }
 });
 
-// We don't need a single btn-settle-confirm modal anymore because the actions are immediate.
-// However, if the old modal HTML is still there, we leave this no-op or handle it.
-document.getElementById('btn-settle-confirm')?.addEventListener('click', async () => {
-    // Legacy fallback or customized offline-settle if we restore the manual modal
-});
-
-// Close modals (also stop scanner if open)
+// Close modals
 document.querySelectorAll('.modal-close').forEach((btn) => {
     btn.addEventListener('click', () => {
-        QRPay.stopScanner();
         document.querySelectorAll('.modal-overlay').forEach((m) => m.classList.add('hidden'));
     });
 });
@@ -948,60 +1040,169 @@ document.querySelectorAll('.modal-close').forEach((btn) => {
 document.querySelectorAll('.modal-overlay').forEach((overlay) => {
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) {
-            QRPay.stopScanner();
             overlay.classList.add('hidden');
         }
     });
 });
 
-// ---- QR Scan & Pay ----
-document.getElementById('btn-scan-pay').addEventListener('click', () => {
-    QRPay.startScanner();
+// ---- Bottom Navigation ----
+document.querySelectorAll('.nav-item').forEach((item) => {
+    item.addEventListener('click', async () => {
+        document.querySelectorAll('.nav-item').forEach((i) => i.classList.remove('active'));
+        item.classList.add('active');
+        const target = item.dataset.target;
+
+        if (target === 'screen-dashboard') {
+            await goToDashboard();
+        } else if (target === 'screen-tracker') {
+            UI.showScreen('screen-tracker');
+            await Tracker.syncCategories();
+            await TrackerUI.renderDashboard();
+            if (navigator.onLine) Tracker.syncPersonalExpenses();
+        } else if (target === 'screen-profile') {
+            document.getElementById('btn-profile').click();
+        }
+    });
 });
 
-// File upload fallback
-document.getElementById('qr-upload-input').addEventListener('change', (e) => {
-    QRPay.handleFileUpload(e);
+// ---- Tracker: Quick Add FAB ----
+document.getElementById('btn-quick-add')?.addEventListener('click', async () => {
+    document.getElementById('pe-amount').value = '';
+    document.getElementById('pe-description').value = '';
+    document.getElementById('pe-notes').value = '';
+    document.getElementById('pe-payment').value = 'cash';
+    await TrackerUI.populateAddForm();
+    UI.showModal('modal-add-personal-expense');
+    // Focus amount input
+    setTimeout(() => document.getElementById('pe-amount')?.focus(), 300);
 });
 
-// Close scanner button
-document.getElementById('btn-close-scanner').addEventListener('click', () => {
-    QRPay.stopScanner();
-});
+// ---- Tracker: Add Personal Expense ----
+document.getElementById('btn-add-personal-expense-confirm')?.addEventListener('click', async () => {
+    const amount = parseFloat(document.getElementById('pe-amount').value);
+    if (!amount || amount <= 0) {
+        UI.showToast('Enter a valid amount.', 'warning');
+        return;
+    }
 
-// Update UPI app buttons when amount or note changes
-document.getElementById('pay-amount').addEventListener('input', () => QRPay.renderAppButtons());
-document.getElementById('pay-note').addEventListener('input', () => QRPay.renderAppButtons());
+    const selectedCat = document.querySelector('#pe-category-grid .category-pill.selected');
+    const category = selectedCat ? selectedCat.dataset.cat : 'Others';
+    const description = document.getElementById('pe-description').value.trim();
+    const date = document.getElementById('pe-date').value
+        ? new Date(document.getElementById('pe-date').value).toISOString()
+        : new Date().toISOString();
+    const paymentMethod = document.getElementById('pe-payment').value;
+    const notes = document.getElementById('pe-notes').value.trim();
 
-// Auto-render UPI apps when payment modal opens (observe class change)
-const payModal = document.getElementById('modal-qr-payment');
-const payObserver = new MutationObserver(() => {
-    if (!payModal.classList.contains('hidden')) {
-        QRPay.renderAppButtons();
+    const btn = document.getElementById('btn-add-personal-expense-confirm');
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+
+    try {
+        await Tracker.addExpense({ amount, category, description, date, paymentMethod, notes });
+        UI.hideModal('modal-add-personal-expense');
+        UI.showToast('Expense added! ✅', 'success');
+        await TrackerUI.renderDashboard();
+        if (navigator.onLine) Tracker.syncPersonalExpenses();
+    } catch (ex) {
+        UI.showToast(ex.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Add Expense';
     }
 });
-payObserver.observe(payModal, { attributes: true, attributeFilter: ['class'] });
 
-// UPI app grid — delegate clicks
-document.getElementById('upi-app-grid').addEventListener('click', (e) => {
-    const btn = e.target.closest('.upi-app-btn');
-    if (!btn) return;
-    QRPay.openUPIApp(btn.dataset.url);
+// ---- Tracker: Delete Personal Expense ----
+document.getElementById('btn-delete-personal-expense')?.addEventListener('click', async () => {
+    const clientId = document.getElementById('btn-delete-personal-expense').dataset.clientId;
+    if (!clientId) return;
+    if (!confirm('Delete this expense?')) return;
+
+    try {
+        await Tracker.deleteExpense(clientId);
+        UI.hideModal('modal-personal-expense-detail');
+        UI.showToast('Expense deleted.', 'success');
+        await TrackerUI.renderDashboard();
+        if (navigator.onLine) Tracker.syncPersonalExpenses();
+    } catch (ex) {
+        UI.showToast('Failed: ' + ex.message, 'error');
+    }
 });
 
-// Copy UPI link
-document.getElementById('btn-copy-upi').addEventListener('click', () => QRPay.copyUPILink());
+// ---- Tracker: Back from all expenses ----
+document.getElementById('btn-tracker-all-back')?.addEventListener('click', () => {
+    UI.showScreen('screen-tracker');
+    setActiveNav('screen-tracker');
+});
 
-// Mark as paid
-document.getElementById('btn-mark-paid').addEventListener('click', async () => {
-    // If in a group context, record the payment; otherwise just close
-    const groupId = currentGroup?.id || currentGroup?._id || null;
-    await QRPay.recordPayment(groupId);
-    // Refresh if in group view
-    if (currentGroup && currentSession) {
-        await UI.renderGroupDetail(currentGroup, currentSession);
-        await UI.updateSyncIndicator();
-        if (navigator.onLine) doSync();
+// ---- Tracker: Budgets ----
+document.getElementById('btn-tracker-budgets')?.addEventListener('click', async () => {
+    UI.showScreen('screen-tracker-budgets');
+    await TrackerUI.renderBudgets();
+});
+
+document.getElementById('btn-tracker-budgets-back')?.addEventListener('click', () => {
+    UI.showScreen('screen-tracker');
+    setActiveNav('screen-tracker');
+});
+
+document.getElementById('btn-set-budget-confirm')?.addEventListener('click', async () => {
+    const category = document.getElementById('budget-category').value || null;
+    const amount = parseFloat(document.getElementById('budget-amount').value);
+    if (!amount || amount < 1) {
+        UI.showToast('Enter a valid budget amount.', 'warning');
+        return;
+    }
+    try {
+        await Tracker.setBudget(category, amount);
+        UI.hideModal('modal-set-budget');
+        UI.showToast('Budget saved! ✅', 'success');
+        await TrackerUI.renderBudgets();
+    } catch (ex) {
+        UI.showToast(ex.message, 'error');
+    }
+});
+
+// ---- Tracker: Categories ----
+document.getElementById('btn-tracker-categories')?.addEventListener('click', async () => {
+    const categories = await Tracker.getCategories();
+    const list = document.getElementById('manage-cat-list');
+    list.innerHTML = categories.map((c) => `
+        <div class="manage-cat-item">
+            <span class="manage-cat-dot" style="background:${c.color}"></span>
+            <span class="manage-cat-icon">${c.icon}</span>
+            <span class="manage-cat-name">${UI.escapeHtml(c.name)}</span>
+            ${c.isDefault ? '<span class="manage-cat-badge">Default</span>' : `<button class="btn btn-ghost btn-xs btn-delete-cat" data-cat-id="${c.id}">×</button>`}
+        </div>
+    `).join('');
+
+    // Delete handlers
+    list.querySelectorAll('.btn-delete-cat').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+            try {
+                await Tracker.deleteCategory(btn.dataset.catId);
+                UI.showToast('Category removed.', 'success');
+                document.getElementById('btn-tracker-categories').click(); // refresh
+            } catch (ex) {
+                UI.showToast(ex.message, 'error');
+            }
+        });
+    });
+
+    UI.showModal('modal-manage-categories');
+});
+
+document.getElementById('btn-add-category')?.addEventListener('click', async () => {
+    const name = document.getElementById('new-cat-name').value.trim();
+    const color = document.getElementById('new-cat-color').value;
+    if (!name) { UI.showToast('Enter a category name.', 'warning'); return; }
+    try {
+        await Tracker.addCategory(name, color, '📁');
+        document.getElementById('new-cat-name').value = '';
+        UI.showToast('Category added!', 'success');
+        document.getElementById('btn-tracker-categories').click(); // refresh
+    } catch (ex) {
+        UI.showToast(ex.message, 'error');
     }
 });
 

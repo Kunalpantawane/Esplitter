@@ -7,6 +7,7 @@ const {
     rejectJoinRequest,
     rotateInviteCode,
     updateGroup,
+    updateSettlementMode,
     transferAdmin,
     deleteGroup,
     archiveGroup,
@@ -34,6 +35,9 @@ router.post('/:id/invite-code/rotate', (req, res) => rotateInviteCode(req, res))
 
 // PATCH /api/groups/:id — Update group (admin only)
 router.patch('/:id', (req, res) => updateGroup(req, res));
+
+// PATCH /api/groups/:id/settlement-mode — Update shared settlement mode (admin only)
+router.patch('/:id/settlement-mode', (req, res) => updateSettlementMode(req, res));
 
 // POST /api/groups/:id/transfer-admin — Transfer admin role to another member
 router.post('/:id/transfer-admin', (req, res) => transferAdmin(req, res));

@@ -1,83 +1,20 @@
 const express = require('express');
 const authenticate = require('../middleware/auth');
-const User = require('../models/User');
+const {
+    getProfile,
+    updateProfile,
+    updateUpiId,
+} = require('../controllers/userController');
 
 const router = express.Router();
 
 // GET /api/user/profile
-router.get('/profile', authenticate, async (req, res) => {
-    try {
-        const user = await User.findById(req.userId).select('-password -refreshToken');
-        if (!user) return res.status(404).json({ error: 'User not found.' });
-        res.json({
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone || '',
-            upiId: user.upiId || '',
-        });
-    } catch (err) {
-        res.status(500).json({ error: 'Server error fetching profile.' });
-    }
-});
+router.get('/profile', authenticate, (req, res) => getProfile(req, res));
 
 // PUT /api/user/profile
-router.put('/profile', authenticate, async (req, res) => {
-    try {
-        const { name, phone } = req.body;
-        const update = {};
-
-        if (name && name.trim()) update.name = name.trim();
-        // Fix 8: Coerce to string before trim to avoid 500 on non-string phone values
-        if (phone !== undefined) update.phone = String(phone || '').trim();
-
-        if (Object.keys(update).length === 0) {
-            return res.status(400).json({ error: 'No fields to update.' });
-        }
-
-        const user = await User.findByIdAndUpdate(req.userId, update, { new: true })
-            .select('-password -refreshToken');
-        if (!user) return res.status(404).json({ error: 'User not found.' });
-
-        res.json({
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone || '',
-            upiId: user.upiId || '',
-        });
-    } catch (err) {
-        res.status(500).json({ error: 'Server error updating profile.' });
-    }
-});
+router.put('/profile', authenticate, (req, res) => updateProfile(req, res));
 
 // PUT /api/user/upi-id
-router.put('/upi-id', authenticate, async (req, res) => {
-    try {
-        const upiId = String(req.body.upiId || '').trim().toLowerCase();
-        if (!upiId) return res.status(400).json({ error: 'UPI ID is required.' });
-
-        const validationError = User.validateUpiId(upiId);
-        if (validationError) return res.status(400).json({ error: validationError });
-
-        const user = await User.findByIdAndUpdate(
-            req.userId,
-            { upiId },
-            { new: true }
-        ).select('-password -refreshToken');
-
-        if (!user) return res.status(404).json({ error: 'User not found.' });
-
-        res.json({
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            phone: user.phone || '',
-            upiId: user.upiId || '',
-        });
-    } catch (err) {
-        res.status(500).json({ error: 'Server error updating UPI ID.' });
-    }
-});
+router.put('/upi-id', authenticate, (req, res) => updateUpiId(req, res));
 
 module.exports = router;

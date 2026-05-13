@@ -42,25 +42,41 @@ const UI = (() => {
     });
 
     // ---- Balance cache ----
-    let _balanceCache = {};  // { groupId: { net, debts, timestamp } }
+    let _balanceCache = {};  // { "groupId:mode": { net, debts, timestamp } }
     const CACHE_TTL = 30000; // 30 seconds
+    let _settlementMode = 'smart'; // Default; overridden per-group from group.settlementMode
 
-    function _getCachedDebts(groupId, transactions, members) {
-        const cached = _balanceCache[groupId];
+    function _getCachedDebts(groupId, transactions, members, mode = _settlementMode) {
+        const cacheKey = `${groupId}:${mode}`;
+        const cached = _balanceCache[cacheKey];
         if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
             return cached;
         }
-        const result = _computeDebts(transactions, members);
-        _balanceCache[groupId] = { ...result, timestamp: Date.now() };
+        const result = _computeDebts(transactions, members, mode);
+        _balanceCache[cacheKey] = { ...result, timestamp: Date.now() };
         return result;
     }
 
     function invalidateBalanceCache(groupId) {
         if (groupId) {
-            delete _balanceCache[groupId];
+            Object.keys(_balanceCache).forEach((key) => {
+                if (key.startsWith(`${groupId}:`)) {
+                    delete _balanceCache[key];
+                }
+            });
         } else {
             _balanceCache = {};
         }
+    }
+
+    function getSettlementMode() {
+        return _settlementMode;
+    }
+
+    function setSettlementMode(mode) {
+        _settlementMode = mode === 'normal' ? 'normal' : 'smart';
+        invalidateBalanceCache();
+        return _settlementMode;
     }
 
     function showScreen(id) {
@@ -199,16 +215,21 @@ const UI = (() => {
         const myId = session.user.id;
         const groupId = group.id || String(group._id);
 
-        // Use cached balances
-        const { net, debts } = _getCachedDebts(groupId, transactions, members);
+        // Use group's settlement mode (API-driven, group-scoped)
+        const settlementMode = group.settlementMode || 'smart';
+        _settlementMode = settlementMode; // Keep internal cache in sync
+        const { net, debts } = _getCachedDebts(groupId, transactions, members, settlementMode);
 
+        const isAdmin = String(group.adminId) === myId;
         _renderBalances(transactions, members, net, debts, myId);
-        _renderSettlement(transactions, members, myId, group, debts);
+        _renderSettlement(transactions, members, myId, group, debts, settlementMode, isAdmin);
+        _renderGroupOverview(transactions, members, myId);
+        _renderGroupSyncIssues(transactions, group);
         _renderExpenses(transactions, members, session, group);
     }
 
     // ---- Pairwise balance computation ----
-    function _computeDebts(transactions, members) {
+    function _computeDebtsSmart(transactions, members) {
         // Step 1: Compute each member's net balance
         const net = {};
         members.forEach((m) => {
@@ -261,6 +282,76 @@ const UI = (() => {
         }
 
         return { net, debts };
+    }
+
+    function _computeDebtsNormal(transactions, members) {
+        const net = {};
+        const owes = {};
+
+        members.forEach((m) => {
+            const id = String(m._id || m.id || m);
+            net[id] = 0;
+        });
+
+        const addDebt = (from, to, amount) => {
+            if (!from || !to || amount <= 0.01) return;
+            owes[from] = owes[from] || {};
+            owes[from][to] = (owes[from][to] || 0) + amount;
+        };
+
+        for (const tx of transactions) {
+            if (tx.status === 'PENDING') continue;
+
+            const payerId = String(tx.paidBy);
+            const amount = Number(tx.amount) || 0;
+            if (net[payerId] !== undefined) net[payerId] += amount;
+
+            if ((tx.type || 'EXPENSE') === 'PAYMENT') {
+                const creditorId = tx.splits && tx.splits.length > 0
+                    ? String(tx.splits[0].userId)
+                    : (tx.receiverId ? String(tx.receiverId) : null);
+                if (creditorId && creditorId !== payerId) {
+                    addDebt(payerId, creditorId, amount);
+                    if (net[creditorId] !== undefined) net[creditorId] -= amount;
+                }
+                continue;
+            }
+
+            for (const split of (tx.splits || [])) {
+                const uid = String(split.userId);
+                const owed = Number(split.amount) || 0;
+                if (net[uid] !== undefined) net[uid] -= owed;
+                if (uid !== payerId) {
+                    addDebt(uid, payerId, owed);
+                }
+            }
+        }
+
+        const allIds = members.map((m) => String(m._id || m.id || m));
+        const debts = [];
+        for (let i = 0; i < allIds.length; i += 1) {
+            for (let j = i + 1; j < allIds.length; j += 1) {
+                const a = allIds[i];
+                const b = allIds[j];
+                const aToB = (owes[a] && owes[a][b]) || 0;
+                const bToA = (owes[b] && owes[b][a]) || 0;
+                const netDebt = +(aToB - bToA).toFixed(2);
+                if (netDebt > 0.01) {
+                    debts.push({ from: a, to: b, amount: netDebt });
+                } else if (netDebt < -0.01) {
+                    debts.push({ from: b, to: a, amount: +Math.abs(netDebt).toFixed(2) });
+                }
+            }
+        }
+
+        debts.sort((left, right) => right.amount - left.amount);
+        return { net, debts };
+    }
+
+    function _computeDebts(transactions, members, mode = _settlementMode) {
+        return mode === 'normal'
+            ? _computeDebtsNormal(transactions, members)
+            : _computeDebtsSmart(transactions, members);
     }
 
     function _getMemberName(members, id, currentUserId = null, selfLabel = 'You') {
@@ -323,7 +414,7 @@ const UI = (() => {
         container.innerHTML = html;
     }
 
-    function _renderSettlement(transactions, members, myId, group, debts) {
+    function _renderSettlement(transactions, members, myId, group, debts, mode = _settlementMode, isAdmin = false) {
         const container = document.getElementById('settlement-section');
         const groupId = group.id || String(group._id);
 
@@ -340,7 +431,14 @@ const UI = (() => {
             return;
         }
 
-        let html = `<h4>🤝 Settlements</h4>`;
+        const modeLabel = mode === 'normal' ? 'Normal' : 'Smart';
+        let html = `<div class="settlement-header">
+            <h4>🤝 Settlements</h4>
+            <label class="settlement-toggle"${!isAdmin ? ' title="Only the group admin can change settlement mode"' : ''}>
+                <input type="checkbox" data-settlement-mode ${mode === 'smart' ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''} />
+                <span>Smart${!isAdmin ? ' (Admin only)' : ''}</span>
+            </label>
+        </div>`;
 
         // Render My Pending Payments (I need to pay)
         html += myPendingPayments.map(tx => {
@@ -356,15 +454,16 @@ const UI = (() => {
                 <div class="settle-right">
                     <span class="settle-amt">₹${Number(tx.amount).toFixed(2)}</span>
                     <button class="btn btn-primary btn-xs btn-pay-now"
-                        data-tx-id="${tx._id}"
+                        data-tx-id="${tx.serverId || ''}"
                         data-client-id="${tx.clientId}"
                         data-group="${groupId}"
                         data-to="${creditorId}" data-to-name="${escapeHtml(creditorName)}"
                         data-amt="${Number(tx.amount).toFixed(2)}"
-                        data-upi="${escapeHtml(toUpi || '')}">
+                        data-upi="${escapeHtml(toUpi || '')}"
+                        data-settlement-mode="${modeLabel}">
                         Pay Now
                     </button>
-                    <button class="btn btn-ghost btn-xs btn-mark-paid-manual" data-client-id="${tx.clientId}" data-tx-id="${tx._id}">Mark Paid</button>
+                    <button class="btn btn-ghost btn-xs btn-mark-paid-manual" data-client-id="${tx.clientId}" data-tx-id="${tx.serverId || ''}">Mark Paid</button>
                 </div>
             </div>`;
         }).join('');
@@ -380,7 +479,7 @@ const UI = (() => {
                 </div>
                 <div class="settle-right">
                     <span class="settle-amt positive">₹${Number(tx.amount).toFixed(2)}</span>
-                    <button class="btn btn-primary btn-xs btn-confirm-receipt" data-client-id="${tx.clientId}" data-tx-id="${tx._id}">Confirm Receipt</button>
+                    <button class="btn btn-primary btn-xs btn-confirm-receipt" data-client-id="${tx.clientId}" data-tx-id="${tx.serverId || ''}">Confirm Receipt</button>
                 </div>
             </div>`;
         }).join('');
@@ -404,7 +503,8 @@ const UI = (() => {
                             data-group="${groupId}"
                             data-to="${d.to}" data-to-name="${escapeHtml(toName)}"
                             data-amt="${d.amount.toFixed(2)}"
-                            data-upi="${escapeHtml(toUpi || '')}">
+                            data-upi="${escapeHtml(toUpi || '')}"
+                            data-settlement-mode="${modeLabel}">
                             Pay Now
                         </button>
                     </div>
@@ -457,7 +557,7 @@ const UI = (() => {
                 const icon = (tx.type === 'PAYMENT') ? '💸' : '💰';
                 const typeLabel = (tx.type === 'PAYMENT') ? 'Settlement' : 'Expense';
                 const amtClass = (tx.type === 'PAYMENT') ? 'settlement' : '';
-                const txId = tx._id || tx.clientId;
+                const txId = tx.serverId || tx.clientId;
                 const date = tx.createdAt ? new Date(tx.createdAt).toLocaleDateString() : '';
 
                 return `
@@ -530,12 +630,78 @@ const UI = (() => {
         if (isAdmin || isCreator) {
             deleteBtn.classList.remove('hidden');
             deleteBtn.dataset.clientId = tx.clientId;
-            deleteBtn.dataset.txId = tx._id || '';
+            deleteBtn.dataset.txId = tx.serverId || '';
         } else {
             deleteBtn.classList.add('hidden');
         }
 
         showModal('modal-expense-detail');
+    }
+
+    function _renderGroupOverview(transactions, members, myId) {
+        const container = document.getElementById('group-overview');
+        if (!container) return;
+
+        const expenses = transactions.filter(tx => (tx.type || 'EXPENSE') === 'EXPENSE' && tx.status !== 'PENDING');
+        const totalSpending = expenses.reduce((sum, tx) => sum + Number(tx.amount), 0);
+
+        let mySpent = 0;
+        let myPaid = 0;
+
+        for (const tx of expenses) {
+            if (String(tx.paidBy) === String(myId)) {
+                myPaid += Number(tx.amount);
+            }
+            const mySplit = (tx.splits || []).find(s => String(s.userId) === String(myId));
+            if (mySplit) {
+                mySpent += Number(mySplit.amount);
+            }
+        }
+
+        container.innerHTML = `
+            <div class="group-overview-panel">
+                <div class="group-overview-header">
+                    <h4>📊 Analytics</h4>
+                </div>
+                <div class="group-overview-grid">
+                    <div class="group-overview-card">
+                        <div class="group-overview-label">Group Spent</div>
+                        <div class="group-overview-value">₹${totalSpending.toFixed(2)}</div>
+                    </div>
+                    <div class="group-overview-card">
+                        <div class="group-overview-label">Your Share</div>
+                        <div class="group-overview-value">₹${mySpent.toFixed(2)}</div>
+                    </div>
+                    <div class="group-overview-card">
+                        <div class="group-overview-label">You Paid</div>
+                        <div class="group-overview-value">₹${myPaid.toFixed(2)}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    function _renderGroupSyncIssues(transactions, group) {
+        const container = document.getElementById('group-sync-issues');
+        if (!container) return;
+
+        const issues = transactions.filter(tx => tx.syncStatus === 'PENDING' || tx.syncStatus === 'FAILED');
+        if (issues.length === 0) {
+            container.classList.add('hidden');
+            container.innerHTML = '';
+            return;
+        }
+
+        container.classList.remove('hidden');
+        container.innerHTML = `
+            <div class="group-sync-panel">
+                <div class="group-sync-header">
+                    <h4>⚠️ Sync Issues</h4>
+                    <span class="group-sync-badge">${issues.length} items</span>
+                </div>
+                <p class="group-sync-desc">These transactions are pending sync or failed to upload to the server. They will be retried automatically when you are online.</p>
+            </div>
+        `;
     }
 
     function populateExpenseForm(group, session) {
@@ -701,7 +867,8 @@ const UI = (() => {
         renderGroups, renderGroupDetail, populateExpenseForm,
         updateSyncIndicator, escapeHtml, showToast,
         renderSplitPreview, updateSplitTotal, invalidateBalanceCache,
-        renderGroupSkeletons, renderExpenseSkeletons
+        renderGroupSkeletons, renderExpenseSkeletons,
+        getSettlementMode, setSettlementMode
     };
 })();
 

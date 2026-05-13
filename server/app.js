@@ -15,6 +15,12 @@ const syncRoutes = require('./routes/sync');
 const expenseRoutes = require('./routes/expenses');
 const userRoutes = require('./routes/user');
 const groupRoutes = require('./routes/groups');
+const personalExpenseRoutes = require('./routes/personalExpenses');
+const categoryRoutes = require('./routes/categories');
+const budgetRoutes = require('./routes/budgets');
+const Category = require('./models/Category');
+const { handleRazorpayWebhook } = require('./controllers/expenseController');
+const { initializeRedis } = require('./config/redis');
 
 const app = express();
 
@@ -50,13 +56,23 @@ const apiLimiter = rateLimit({
   message: { error: 'Too many requests. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+    skip: (req) => req.originalUrl === '/api/expenses/razorpay/webhook',
 });
 
 // Body parsing & cookies
-app.use(express.json());
+app.use(express.json({
+  limit: '1mb',
+  verify: (req, res, buf) => {
+    if (req.originalUrl === '/api/expenses/razorpay/webhook') {
+      req.rawBody = Buffer.from(buf);
+    }
+  },
+}));
 app.use(cookieParser());
 app.use(express.static('public'));
 app.use('/images', express.static('images'));
+
+app.post('/api/expenses/razorpay/webhook', (req, res) => handleRazorpayWebhook(req, res));
 
 // Routes
 // Note: /api/auth has its own strict 15req/15min rate limiter defined inside authRoutes
@@ -65,10 +81,45 @@ app.use('/api/sync', apiLimiter, syncRoutes);
 app.use('/api/expenses', apiLimiter, expenseRoutes);
 app.use('/api/user', apiLimiter, userRoutes);
 app.use('/api/groups', apiLimiter, groupRoutes);
+app.use('/api/personal-expenses', apiLimiter, personalExpenseRoutes);
+app.use('/api/categories', apiLimiter, categoryRoutes);
+app.use('/api/budgets', apiLimiter, budgetRoutes);
 
 // Health Check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', time: new Date().toISOString() });
+});
+
+// --- Global Error Handler ---
+// Catches all unhandled errors from async route handlers (via next(err) or throw)
+app.use((err, req, res, _next) => {
+  // Log full error in non-production for debugging
+  if (process.env.NODE_ENV !== 'production') {
+    console.error('[Global Error Handler]', err);
+  } else {
+    console.error('[Global Error Handler]', err.message);
+  }
+
+  // CORS error from our origin check
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ error: 'CORS: Origin not allowed.' });
+  }
+
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    error: process.env.NODE_ENV === 'production'
+      ? 'Internal server error.'
+      : err.message || 'Internal server error.',
+  });
+});
+
+// --- Process-level safety nets ---
+process.on('unhandledRejection', (reason) => {
+  console.error('[UnhandledRejection]', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[UncaughtException]', err);
+  // In production you'd want to gracefully shut down; for now, just log.
 });
 
 // Connect to MongoDB and start server
@@ -79,8 +130,11 @@ const shouldAutoConnect = process.env.NODE_ENV !== 'test';
 if (shouldAutoConnect) {
   mongoose
     .connect(MONGODB_URI)
-    .then(() => {
+    .then(async () => {
       console.log('✅ Connected to MongoDB');
+      await initializeRedis();
+      // Seed default categories
+      try { await Category.seedDefaults(); } catch (e) { console.warn('Category seed skip:', e.message); }
       // Only listen if executed directly (local dev). Vercel requires exporting the app instead.
       if (require.main === module) {
         app.listen(PORT, () => {

@@ -21,8 +21,10 @@ const Sync = (() => {
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 5000);
-            const res = await fetch('/api/health', {
+            const res = await Api.request('/api/health', {
                 method: 'HEAD',
+                auth: false,
+                parseJson: false,
                 signal: controller.signal,
                 cache: 'no-store',
             });
@@ -89,20 +91,10 @@ const Sync = (() => {
                 deleted: tx.deleted || false,
             }));
 
-            const res = await fetch(API, {
+            const { synced, errors, serverAdds, serverGroups, allServerGroupIds, syncTime } = await Api.request(API, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...Auth.authHeader(session.token),
-                },
-                body: JSON.stringify({ lastSyncAt: _lastSyncAt, pending: pendingPayload }),
+                body: { lastSyncAt: _lastSyncAt, pending: pendingPayload },
             });
-
-            if (!res.ok) {
-                throw new Error(`Server returned ${res.status}`);
-            }
-
-            const { synced, errors, serverAdds, serverGroups, allServerGroupIds, syncTime } = await res.json();
 
             // ---- Process synced items ----
             for (const clientId of (synced || [])) {
@@ -146,6 +138,8 @@ const Sync = (() => {
                 }
                 
                 const existing = await db.transactions.get(tx.clientId);
+                // Store MongoDB _id so we can call server endpoints like settle-status
+                const serverId = tx._id ? String(tx._id) : undefined;
                 if (!existing) {
                     await db.transactions.put({
                         clientId: tx.clientId,
@@ -160,6 +154,7 @@ const Sync = (() => {
                         status: tx.status || (tx.type === 'PAYMENT' ? 'PENDING' : 'PAID'),
                         syncStatus: 'SYNCED',
                         createdAt: tx.createdAt || new Date().toISOString(),
+                        serverId,
                     });
                 } else if (existing.syncStatus === 'SYNCED') {
                     // Update existing synced records in case details changed
@@ -168,7 +163,8 @@ const Sync = (() => {
                         amount: tx.amount,
                         splits: tx.splits,
                         splitType: tx.splitType || 'EQUAL',
-                        status: tx.status || (tx.type === 'PAYMENT' ? 'PENDING' : 'PAID')
+                        status: tx.status || (tx.type === 'PAYMENT' ? 'PENDING' : 'PAID'),
+                        serverId,
                     });
                 }
             }
@@ -182,6 +178,7 @@ const Sync = (() => {
                     id: gId,
                     name: g.name,
                     inviteCode: g.inviteCode || '',
+                    settlementMode: g.settlementMode === 'normal' ? 'normal' : 'smart',
                     adminId: g.adminId ? String(g.adminId) : '',
                     members: g.members || [],
                     description: g.description || '',
@@ -290,19 +287,17 @@ const Sync = (() => {
         if (!session) return [];
 
         try {
-            const res = await fetch(`${API}/groups`, {
-                headers: Auth.authHeader(session.token),
+            const data = await Api.request(`${API}/groups`, {
                 cache: 'no-store'
             });
-            if (!res.ok) return db.groups.toArray();
-
-            const { groups } = await res.json();
+            const { groups } = data;
             for (const g of groups) {
                 const gId = String(g._id || g.id);
                 await db.groups.put({
                     id: gId,
                     name: g.name,
                     inviteCode: g.inviteCode || '',
+                    settlementMode: g.settlementMode === 'normal' ? 'normal' : 'smart',
                     adminId: g.adminId ? String(g.adminId) : '',
                     members: g.members || [],
                     description: g.description || '',
@@ -323,13 +318,10 @@ const Sync = (() => {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
 
-        const res = await fetch(`${API}/groups`, {
+        const data = await Api.request(`${API}/groups`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...Auth.authHeader(session.token) },
-            body: JSON.stringify({ action: 'create', name }),
+            body: { action: 'create', name },
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
 
         const g = data.group;
         const gId = String(g._id || g.id);
@@ -337,6 +329,7 @@ const Sync = (() => {
             id: gId,
             name: g.name,
             inviteCode: g.inviteCode || '',
+            settlementMode: g.settlementMode === 'normal' ? 'normal' : 'smart',
             adminId: g.adminId ? String(g.adminId) : '',
             members: g.members || [{ _id: session.user.id, name: session.user.name }],
             description: g.description || '',
@@ -350,13 +343,10 @@ const Sync = (() => {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
 
-        const res = await fetch(`${API}/groups`, {
+        const data = await Api.request(`${API}/groups`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...Auth.authHeader(session.token) },
-            body: JSON.stringify({ action: 'join', inviteCode }),
+            body: { action: 'join', inviteCode },
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
 
         if (data.pending) {
             return {
@@ -372,6 +362,7 @@ const Sync = (() => {
             id: gId,
             name: g.name,
             inviteCode: g.inviteCode || '',
+            settlementMode: g.settlementMode === 'normal' ? 'normal' : 'smart',
             adminId: g.adminId ? String(g.adminId) : '',
             members: g.members || [],
             description: g.description || '',
@@ -416,21 +407,58 @@ const Sync = (() => {
             try {
                 const session = await Auth.getSession();
                 if (!session) return;
-                const res = await fetch(`/api/expenses/client/${clientId}`, {
+                const res = await Api.request(`/api/expenses/client/${clientId}`, {
                     method: 'DELETE',
-                    headers: Auth.authHeader(session.token),
                 });
-                if (res.ok) {
-                    // Server confirmed deletion — remove tombstone locally
-                    await db.transactions.delete(clientId);
-                }
-                // If !res.ok, tombstone stays PENDING → next sync will retry
+                // Server confirmed deletion — remove tombstone locally
+                await db.transactions.delete(clientId);
             } catch (err) {
                 console.warn('Failed to delete from server:', err.message);
                 // Tombstone stays PENDING → will be pushed on next sync
             }
         }
         // If offline, tombstone stays PENDING → normal sync will push it
+    }
+
+    async function getGroupSyncIssues(groupId) {
+        const issues = await db.transactions
+            .where('groupId')
+            .equals(groupId)
+            .and((tx) => tx.syncStatus === 'FAILED')
+            .toArray();
+
+        return issues
+            .map((tx) => ({
+                clientId: tx.clientId,
+                serverId: tx.serverId,
+                groupId: tx.groupId,
+                type: tx.type || 'EXPENSE',
+                description: tx.description,
+                amount: Number(tx.amount) || 0,
+                status: tx.status || 'PAID',
+                reason: tx.lastError || 'Group sync failed. Retry to push this change again.',
+                retryCount: tx.retryCount || 0,
+                createdAt: tx.createdAt,
+            }))
+            .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
+    }
+
+    async function retryGroupExpenseSync(clientId) {
+        const tx = await db.transactions.get(clientId);
+        if (!tx) throw new Error('Expense not found.');
+
+        await db.transactions.update(clientId, {
+            syncStatus: 'PENDING',
+            retryCount: 0,
+            lastError: null,
+            nextRetryAt: null,
+        });
+        UI.invalidateBalanceCache(tx.groupId);
+
+        if (navigator.onLine) {
+            return syncWithServer();
+        }
+        return null;
     }
 
     async function updateSettlementStatus(clientId, serverId, status) {
@@ -443,16 +471,12 @@ const Sync = (() => {
             try {
                 const session = await Auth.getSession();
                 if (!session) return;
-                const res = await fetch(`/api/expenses/${serverId}/settle-status`, {
+                const res = await Api.request(`/api/expenses/${serverId}/settle-status`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json', ...Auth.authHeader(session.token) },
-                    body: JSON.stringify({ status })
+                    body: { status },
                 });
-                if (res.ok) {
-                    // Server confirmed — mark as synced
-                    await db.transactions.update(clientId, { syncStatus: 'SYNCED' });
-                }
-                // If !res.ok, syncStatus stays PENDING → next sync will retry
+                // Server confirmed — mark as synced
+                await db.transactions.update(clientId, { syncStatus: 'SYNCED' });
             } catch (err) {
                 console.warn('Failed to update status on server:', err.message);
                 // syncStatus stays PENDING → will be picked up by next sync
@@ -483,39 +507,43 @@ const Sync = (() => {
     async function getGroupDetail(groupId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}`, {
-            headers: Auth.authHeader(session.token),
-            credentials: 'include',
+        const data = await Api.request(`${GROUP_API}/${groupId}`, {
+            cache: 'no-store',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to fetch group.');
         return data.group;
     }
 
     async function updateGroup(groupId, name, description) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}`, {
+        const data = await Api.request(`${GROUP_API}/${groupId}`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json', ...Auth.authHeader(session.token) },
-            credentials: 'include',
-            body: JSON.stringify({ name, description }),
+            body: { name, description },
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to update group.');
+        return data.group;
+    }
+
+    async function updateSettlementMode(groupId, settlementMode) {
+        const session = await Auth.getSession();
+        if (!session) throw new Error('Not logged in.');
+        const mode = settlementMode === 'normal' ? 'normal' : 'smart';
+        const data = await Api.request(`${GROUP_API}/${groupId}/settlement-mode`, {
+            method: 'PATCH',
+            body: { settlementMode: mode },
+        });
+        await db.groups.update(groupId, {
+            settlementMode: mode,
+            lastActivityAt: data.group && data.group.lastActivityAt ? data.group.lastActivityAt : new Date().toISOString(),
+        });
         return data.group;
     }
 
     async function archiveGroup(groupId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}/archive`, {
+        const data = await Api.request(`${GROUP_API}/${groupId}/archive`, {
             method: 'PATCH',
-            headers: Auth.authHeader(session.token),
-            credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to archive group.');
         await db.groups.update(groupId, { isArchived: true, lastActivityAt: new Date() });
         return data;
     }
@@ -523,26 +551,18 @@ const Sync = (() => {
     async function removeMember(groupId, userId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}/members/${userId}`, {
+        const data = await Api.request(`${GROUP_API}/${groupId}/members/${userId}`, {
             method: 'DELETE',
-            headers: Auth.authHeader(session.token),
-            credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to remove member.');
         return data.group;
     }
 
     async function leaveGroup(groupId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}/leave`, {
+        const data = await Api.request(`${GROUP_API}/${groupId}/leave`, {
             method: 'POST',
-            headers: Auth.authHeader(session.token),
-            credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to leave group.');
         await db.groups.delete(groupId);
         return data;
     }
@@ -550,51 +570,36 @@ const Sync = (() => {
     async function getJoinRequests(groupId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}/join-requests`, {
-            headers: Auth.authHeader(session.token),
-            credentials: 'include',
+        const data = await Api.request(`${GROUP_API}/${groupId}/join-requests`, {
+            cache: 'no-store',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to fetch join requests.');
         return data.requests || [];
     }
 
     async function approveJoinRequest(groupId, requestId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}/join-requests/${requestId}/approve`, {
+        const data = await Api.request(`${GROUP_API}/${groupId}/join-requests/${requestId}/approve`, {
             method: 'POST',
-            headers: Auth.authHeader(session.token),
-            credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to approve join request.');
         return data.group;
     }
 
     async function rejectJoinRequest(groupId, requestId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}/join-requests/${requestId}/reject`, {
+        const data = await Api.request(`${GROUP_API}/${groupId}/join-requests/${requestId}/reject`, {
             method: 'POST',
-            headers: Auth.authHeader(session.token),
-            credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to reject join request.');
         return data;
     }
 
     async function rotateInviteCode(groupId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}/invite-code/rotate`, {
+        const data = await Api.request(`${GROUP_API}/${groupId}/invite-code/rotate`, {
             method: 'POST',
-            headers: Auth.authHeader(session.token),
-            credentials: 'include',
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to regenerate invite code.');
         await db.groups.update(groupId, { inviteCode: data.inviteCode, lastActivityAt: new Date() });
         return data.inviteCode;
     }
@@ -602,14 +607,10 @@ const Sync = (() => {
     async function transferAdmin(groupId, newAdminUserId) {
         const session = await Auth.getSession();
         if (!session) throw new Error('Not logged in.');
-        const res = await fetch(`${GROUP_API}/${groupId}/transfer-admin`, {
+        const data = await Api.request(`${GROUP_API}/${groupId}/transfer-admin`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...Auth.authHeader(session.token) },
-            credentials: 'include',
-            body: JSON.stringify({ newAdminUserId }),
+            body: { newAdminUserId },
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to transfer admin role.');
         await db.groups.update(groupId, {
             adminId: String(data.group.adminId),
             members: data.group.members,
@@ -621,9 +622,10 @@ const Sync = (() => {
     return {
         syncWithServer, syncGroups, createGroup, joinGroup,
         addExpense, updateSettlementStatus, deleteExpense, getGroupTransactions,
+        getGroupSyncIssues, retryGroupExpenseSync,
         getPendingCount, getFailedCount, retryFailed,
         isSyncInProgress, getLastSyncTime, checkActualConnectivity,
-        getGroupDetail, updateGroup, archiveGroup, removeMember, leaveGroup,
+        getGroupDetail, updateGroup, updateSettlementMode, archiveGroup, removeMember, leaveGroup,
         getJoinRequests, approveJoinRequest, rejectJoinRequest, rotateInviteCode,
         transferAdmin,
     };

@@ -3,26 +3,7 @@ const Transaction = require('../models/Transaction');
 const User = require('../models/User');
 const { computeGroupBalances } = require('../services/balanceService');
 const runAtomic = require('../lib/runAtomic');
-
-function isGroupMember(group, userId) {
-    return group.members.map(String).includes(String(userId));
-}
-
-function getMemberRole(group, userId) {
-    const uid = String(userId);
-    if (String(group.adminId) === uid) return 'admin';
-    if (group.memberRoles && typeof group.memberRoles.get === 'function') {
-        return group.memberRoles.get(uid) || 'member';
-    }
-    if (group.memberRoles && typeof group.memberRoles === 'object') {
-        return group.memberRoles[uid] || 'member';
-    }
-    return 'member';
-}
-
-function isGroupAdmin(group, userId) {
-    return getMemberRole(group, userId) === 'admin';
-}
+const { isGroupMember, getMemberRole, isGroupAdmin } = require('../lib/groupAccess');
 
 function generateInviteCode() {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -200,6 +181,33 @@ async function updateGroup(req, res) {
         res.json({ group: { ...updated, id: String(updated._id) } });
     } catch (err) {
         res.status(500).json({ error: 'Failed to update group.' });
+    }
+}
+
+// PATCH /api/groups/:id/settlement-mode - Update group settlement mode (admin only)
+async function updateSettlementMode(req, res) {
+    try {
+        const group = await Group.findById(req.params.id);
+        if (!group) return res.status(404).json({ error: 'Group not found.' });
+        if (!isGroupAdmin(group, req.userId)) {
+            return res.status(403).json({ error: 'Only the admin can update settlement mode.' });
+        }
+
+        const settlementMode = req.body && req.body.settlementMode;
+        if (settlementMode !== 'smart' && settlementMode !== 'normal') {
+            return res.status(400).json({ error: 'settlementMode must be either "smart" or "normal".' });
+        }
+
+        group.settlementMode = settlementMode;
+        group.lastActivityAt = new Date();
+        await group.save();
+
+        const updated = await Group.findById(group._id)
+            .populate('members', 'name email upiId')
+            .lean();
+        res.json({ group: { ...updated, id: String(updated._id) } });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to update settlement mode.' });
     }
 }
 
@@ -393,6 +401,7 @@ module.exports = {
     rejectJoinRequest,
     rotateInviteCode,
     updateGroup,
+    updateSettlementMode,
     transferAdmin,
     deleteGroup,
     archiveGroup,

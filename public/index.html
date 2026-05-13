@@ -4,9 +4,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Esplitter – Group Expense Tracker</title>
+  <title>Esplitter – Expense Tracker & Splitter</title>
   <meta name="description"
-    content="Track shared expenses with friends, roommates, and travel groups — offline first." />
+    content="Track personal expenses and split group bills with friends — offline first, smart insights." />
   <link rel="stylesheet" href="/css/style.css" />
   <link rel="manifest" href="/manifest.json" />
 </head>
@@ -108,17 +108,6 @@
           </div>
         </div>
 
-        <!-- Scan & Pay Quick Action -->
-        <div class="scan-pay-hero">
-          <button id="btn-scan-pay" class="btn-scan-pay">
-            <span class="scan-icon">📷</span>
-            <div class="scan-text">
-              <strong>Scan & Pay</strong>
-              <small>Scan any UPI QR code to pay instantly</small>
-            </div>
-            <span class="scan-arrow">→</span>
-          </button>
-        </div>
         <div id="groups-list" class="groups-list">
           <div class="empty-state">
             <div class="empty-icon">🌟</div>
@@ -151,6 +140,10 @@
 
     <!-- Settlement Section -->
     <div class="settlement-section" id="settlement-section"></div>
+
+    <!-- Group Analytics -->
+    <div id="group-overview" class="group-overview"></div>
+    <div id="group-sync-issues" class="group-sync-issues hidden"></div>
 
     <div class="section-header" style="padding: 0 16px;">
       <h3>Expenses</h3>
@@ -256,6 +249,66 @@
       </div>
     </main>
   </div>
+
+  <!-- ============ TRACKER DASHBOARD SCREEN ============ -->
+  <div id="screen-tracker" class="screen">
+    <header class="app-header">
+      <div class="header-left">
+        <span class="logo-small">💰 My Expenses</span>
+      </div>
+      <div class="header-right">
+        <button id="btn-tracker-budgets" class="btn btn-ghost btn-sm" title="Budgets">📋</button>
+        <button id="btn-tracker-categories" class="btn btn-ghost btn-sm" title="Categories">🏷️</button>
+      </div>
+    </header>
+    <main class="tracker-main">
+      <div id="tracker-content"></div>
+    </main>
+    <!-- Quick Add FAB -->
+    <button id="btn-quick-add" class="fab-quick-add" aria-label="Quick Add Expense">
+      <span class="fab-icon">+</span>
+    </button>
+  </div>
+
+  <!-- ============ TRACKER ALL EXPENSES SCREEN ============ -->
+  <div id="screen-tracker-all" class="screen">
+    <header class="app-header">
+      <button id="btn-tracker-all-back" class="btn btn-ghost" aria-label="Go Back">← Back</button>
+      <h2>All Expenses</h2>
+      <div></div>
+    </header>
+    <main class="tracker-main">
+      <div id="tracker-all-expense-list" class="tracker-expense-list"></div>
+    </main>
+  </div>
+
+  <!-- ============ TRACKER BUDGETS SCREEN ============ -->
+  <div id="screen-tracker-budgets" class="screen">
+    <header class="app-header">
+      <button id="btn-tracker-budgets-back" class="btn btn-ghost" aria-label="Go Back">← Back</button>
+      <h2>Budgets</h2>
+      <div></div>
+    </header>
+    <main class="tracker-main">
+      <div id="tracker-budget-content"></div>
+    </main>
+  </div>
+
+  <!-- ============ BOTTOM NAVIGATION ============ -->
+  <nav id="bottom-nav" class="bottom-nav hidden">
+    <button class="nav-item active" data-target="screen-dashboard">
+      <span class="nav-icon">👥</span>
+      <span class="nav-label">Groups</span>
+    </button>
+    <button class="nav-item" data-target="screen-tracker">
+      <span class="nav-icon">💰</span>
+      <span class="nav-label">Tracker</span>
+    </button>
+    <button class="nav-item" data-target="screen-profile">
+      <span class="nav-icon">👤</span>
+      <span class="nav-label">Profile</span>
+    </button>
+  </nav>
 
   </div> <!-- End .app-container -->
 
@@ -407,77 +460,121 @@
     </div>
   </div>
 
-  <!-- ============ QR SCANNER MODAL ============ -->
-  <div id="modal-qr-scanner" class="modal-overlay hidden">
-    <div class="modal modal-qr">
-      <div class="modal-qr-header">
-        <h3>📷 Scan QR Code</h3>
-        <button id="btn-close-scanner" class="btn btn-ghost modal-close" aria-label="Close Scanner">✕</button>
+  <!-- ============ ADD PERSONAL EXPENSE MODAL ============ -->
+  <div id="modal-add-personal-expense" class="modal-overlay hidden">
+    <div class="modal modal-expense">
+      <h3>Add Expense</h3>
+      <div class="form-group">
+        <label>Amount (₹)</label>
+        <input type="number" id="pe-amount" class="pe-amount-input" placeholder="0" min="1" step="0.01" inputmode="decimal" autofocus />
       </div>
-      <div id="qr-reader" class="qr-reader"></div>
-      <p id="qr-status" class="qr-status scanning">Point camera at a UPI QR code…</p>
-      
-      <!-- Fallback Upload Section -->
-      <div class="qr-upload-section">
-        <label for="qr-upload-input" class="btn btn-secondary btn-sm btn-upload-qr">
-          📁 Upload QR Image
-        </label>
-        <input type="file" id="qr-upload-input" accept="image/*" class="hidden" />
+      <div class="form-group">
+        <label>Category</label>
+        <div id="pe-category-grid" class="category-grid"></div>
+      </div>
+      <div class="form-group">
+        <label>Description (optional)</label>
+        <input type="text" id="pe-description" placeholder="e.g. Lunch, Uber, Netflix" maxlength="200" />
+      </div>
+      <div class="form-row">
+        <div class="form-group form-group-half">
+          <label>Date & Time</label>
+          <input type="datetime-local" id="pe-date" />
+        </div>
+        <div class="form-group form-group-half">
+          <label>Payment</label>
+          <select id="pe-payment">
+            <option value="cash">💵 Cash</option>
+            <option value="upi">📱 UPI</option>
+            <option value="card">💳 Card</option>
+            <option value="other">💸 Other</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Notes (optional)</label>
+        <input type="text" id="pe-notes" placeholder="Any extra details..." maxlength="500" />
+      </div>
+      <div class="modal-actions">
+        <button id="btn-add-personal-expense-confirm" class="btn btn-primary">Add Expense</button>
+        <button class="btn btn-ghost modal-close">Cancel</button>
       </div>
     </div>
   </div>
 
-  <!-- ============ QR PAYMENT MODAL ============ -->
-  <div id="modal-qr-payment" class="modal-overlay hidden">
-    <div class="modal modal-payment">
-      <h3>💸 Pay via UPI</h3>
-
-      <div class="pay-recipient">
-        <div class="pay-avatar">👤</div>
-        <div class="pay-info">
-          <span id="pay-name" class="pay-name">Recipient</span>
-          <span id="pay-upi-id" class="pay-upi-id">user@upi</span>
+  <!-- ============ PERSONAL EXPENSE DETAIL MODAL ============ -->
+  <div id="modal-personal-expense-detail" class="modal-overlay hidden">
+    <div class="modal modal-expense-detail">
+      <div class="ped-header">
+        <div class="ped-icon">📦</div>
+        <div>
+          <div class="ped-category">Category</div>
+          <div class="ped-amount">₹0</div>
         </div>
       </div>
-
-      <div class="form-group">
-        <label for="pay-amount">Amount (₹)</label>
-        <input type="number" id="pay-amount" class="pay-amount-input" placeholder="0.00" min="1" step="0.01" />
+      <div class="ped-body">
+        <div class="detail-row"><span class="detail-label">Description</span><span class="detail-value ped-desc">—</span></div>
+        <div class="detail-row"><span class="detail-label">Date</span><span class="detail-value ped-date">—</span></div>
+        <div class="detail-row"><span class="detail-label">Payment</span><span class="detail-value ped-payment">Cash</span></div>
+        <div class="detail-row"><span class="detail-label">Notes</span><span class="detail-value ped-notes">—</span></div>
+        <div class="detail-row"><span class="detail-label">Sync</span><span class="detail-value ped-sync">SYNCED</span></div>
       </div>
-
-      <div class="form-group">
-        <label for="pay-note">Note (optional)</label>
-        <input type="text" id="pay-note" placeholder="e.g. Dinner split, Rent, etc." maxlength="100" />
-      </div>
-
-      <!-- Desktop QR Fallback (Hidden on Mobile) -->
-      <div id="pay-desktop-qr-container" class="pay-desktop-qr-container hidden">
-        <p class="upi-section-label">Scan with phone to pay</p>
-        <canvas id="pay-desktop-qr"></canvas>
-      </div>
-
-      <div class="upi-section" id="pay-mobile-upi-section">
-        <p class="upi-section-label">Pay with</p>
-        <div id="upi-app-grid" class="upi-app-grid"></div>
-        <button id="btn-copy-upi" class="btn btn-ghost btn-sm btn-copy-upi">📋 Copy UPI Link</button>
-      </div>
-
       <div class="modal-actions">
-        <button id="btn-mark-paid" class="btn btn-primary">✅ I've Paid</button>
+        <button id="btn-delete-personal-expense" class="btn btn-danger">🗑️ Delete</button>
+        <button class="btn btn-ghost modal-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ SET BUDGET MODAL ============ -->
+  <div id="modal-set-budget" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>💰 Set Budget</h3>
+      <div class="form-group">
+        <label>Category</label>
+        <select id="budget-category"><option value="">Overall (All Categories)</option></select>
+      </div>
+      <div class="form-group">
+        <label>Monthly Limit (₹)</label>
+        <input type="number" id="budget-amount" placeholder="e.g. 10000" min="1" step="1" />
+      </div>
+      <div class="modal-actions">
+        <button id="btn-set-budget-confirm" class="btn btn-primary">Save Budget</button>
         <button class="btn btn-ghost modal-close">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ MANAGE CATEGORIES MODAL ============ -->
+  <div id="modal-manage-categories" class="modal-overlay hidden">
+    <div class="modal">
+      <h3>🏷️ Manage Categories</h3>
+      <div id="manage-cat-list" class="manage-cat-list"></div>
+      <div class="form-group" style="margin-top:12px">
+        <label>Add Custom Category</label>
+        <div class="manage-cat-add-row">
+          <input type="text" id="new-cat-name" placeholder="Category name" maxlength="30" />
+          <input type="color" id="new-cat-color" value="#6366f1" class="color-picker" />
+          <button id="btn-add-category" class="btn btn-primary btn-sm">Add</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost modal-close">Close</button>
       </div>
     </div>
   </div>
 
   <!-- Scripts -->
   <script src="https://unpkg.com/dexie@3/dist/dexie.js"></script>
-  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-  <script src="https://unpkg.com/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
   <script src="/js/db.js"></script>
+  <script src="/js/api.js"></script>
   <script src="/js/auth.js"></script>
   <script src="/js/sync.js"></script>
   <script src="/js/ui.js"></script>
-  <script src="/js/qrpay.js"></script>
+  <script src="/js/tracker.js"></script>
+  <script src="/js/tracker-ui.js"></script>
   <script src="/js/app.js"></script>
 
   <!-- Toast Container -->

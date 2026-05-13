@@ -132,6 +132,63 @@ describe('Core Regression Suite', () => {
         expect(balancesRes.body.balances[member.id].amount).toBe(-50);
     });
 
+    test('normal settlement mode and Razorpay order wiring work together', async () => {
+        const admin = await registerUser('admin');
+        const member = await registerUser('member');
+
+        const group = await createGroup(admin.token, 'Normal Mode Group');
+        await requestAndApproveJoin({
+            adminToken: admin.token,
+            memberToken: member.token,
+            groupId: String(group._id),
+            inviteCode: group.inviteCode,
+        });
+
+        await request(app)
+            .post('/api/expenses')
+            .set('Authorization', `Bearer ${admin.token}`)
+            .send({
+                groupId: String(group._id),
+                description: 'Coffee',
+                amount: 40,
+                paidBy: admin.id,
+                splits: [
+                    { userId: admin.id, amount: 20 },
+                    { userId: member.id, amount: 20 },
+                ],
+                splitType: 'CUSTOM',
+                type: 'EXPENSE',
+            });
+
+        const balancesRes = await request(app)
+            .get(`/api/expenses/${group._id}/balances?mode=normal`)
+            .set('Authorization', `Bearer ${admin.token}`);
+
+        expect(balancesRes.statusCode).toBe(200);
+        expect(balancesRes.body.mode).toBe('normal');
+        expect(balancesRes.body.isSettled).toBe(false);
+
+        const orderRes = await request(app)
+            .post('/api/expenses/razorpay/order')
+            .set('Authorization', `Bearer ${admin.token}`)
+            .send({
+                groupId: String(group._id),
+                amount: 25,
+                debtorId: admin.id,
+                creditorId: member.id,
+                clientId: 'test-client-id',
+            });
+
+        if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+            expect(orderRes.statusCode).toBe(201);
+            expect(orderRes.body.order_id).toBeTruthy();
+            expect(orderRes.body.keyId).toBe(process.env.RAZORPAY_KEY_ID);
+        } else {
+            expect(orderRes.statusCode).toBe(503);
+            expect(orderRes.body.error).toMatch(/Razorpay is not configured/i);
+        }
+    });
+
     test('deleting expense keeps balances consistent and no orphan financial impact remains', async () => {
         const admin = await registerUser('admin');
         const member = await registerUser('member');
