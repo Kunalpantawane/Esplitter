@@ -21,8 +21,6 @@ const transactionSchema = new mongoose.Schema(
         status: { type: String, enum: ['PENDING', 'PAID', 'CONFIRMED'], default: 'PAID' }, // default PAID for backward compatibility and expenses
         deleted: { type: Boolean, default: false },
         syncedAt: { type: Date, default: Date.now },
-        paymentRecordId: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentRecord', sparse: true },
-        paymentVerifiedAt: { type: Date, sparse: true },
     },
     { timestamps: true }
 );

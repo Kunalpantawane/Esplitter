@@ -1,5 +1,7 @@
 // sync.js - Robust offline-first sync logic (uses window.db, window.Auth, window.UI)
 
+// sync.js - Robust offline-first sync logic (uses window.db, window.Auth, window.UI)
+
 const Sync = (() => {
     const API = '/api/sync';
     const MAX_RETRIES = 6;
@@ -14,6 +16,14 @@ const Sync = (() => {
     // ---- Sync Guard ----
     function isSyncInProgress() { return _syncing; }
     function getLastSyncTime() { return _lastSyncAt; }
+
+    /** Clear stale sync cursor — MUST be called on login/logout so the
+     *  next syncWithServer pull phase doesn't skip groups unchanged
+     *  since a previous session's timestamp. */
+    function resetSyncState() {
+        _lastSyncAt = null;
+        localStorage.removeItem('lastSyncAt');
+    }
 
     // ---- Actual Connectivity Check ----
     async function checkActualConnectivity() {
@@ -91,19 +101,43 @@ const Sync = (() => {
                 deleted: tx.deleted || false,
             }));
 
-            const { synced, errors, serverAdds, serverGroups, allServerGroupIds, syncTime } = await Api.request(API, {
+            const firstPage = await Api.request(API, {
                 method: 'POST',
                 body: { lastSyncAt: _lastSyncAt, pending: pendingPayload },
             });
+            const { synced, errors, serverGroups, allServerGroupIds, syncTime } = firstPage;
+            const serverAdds = [...(firstPage.serverAdds || [])];
+            let hasMore = firstPage.hasMore;
+            let nextCursor = firstPage.nextCursor;
+
+            while (hasMore && nextCursor) {
+                const nextPage = await Api.request(API, {
+                    method: 'POST',
+                    body: {
+                        lastSyncAt: _lastSyncAt,
+                        pending: [],
+                        cursor: nextCursor,
+                        syncWindowEnd: syncTime,
+                    },
+                });
+                serverAdds.push(...(nextPage.serverAdds || []));
+                hasMore = nextPage.hasMore;
+                nextCursor = nextPage.nextCursor;
+            }
 
             // ---- Process synced items ----
             for (const clientId of (synced || [])) {
-                await db.transactions.where('clientId').equals(clientId).modify({
-                    syncStatus: 'SYNCED',
-                    retryCount: 0,
-                    lastError: null,
-                    nextRetryAt: null,
-                });
+                const localTx = await db.transactions.get(clientId);
+                if (localTx && localTx.deleted) {
+                    await db.transactions.delete(clientId);
+                } else {
+                    await db.transactions.where('clientId').equals(clientId).modify({
+                        syncStatus: 'SYNCED',
+                        retryCount: 0,
+                        lastError: null,
+                        nextRetryAt: null,
+                    });
+                }
             }
 
             // ---- Process server errors ----
@@ -188,9 +222,9 @@ const Sync = (() => {
             }
 
             // ---- Cleanup local groups not in the user's server-side group list ----
-            // Use allServerGroupIds (all groups user belongs to) rather than serverGroupIds (only changed ones)
-            // Run even when server returns zero groups (user left/was removed from all groups)
-            if (allServerGroupIds) {
+            // Guard against accidental mass-delete when server returns an empty/invalid list.
+            // In that case, keep local groups and let the next successful sync reconcile them.
+            if (Array.isArray(allServerGroupIds) && allServerGroupIds.length > 0) {
                 const validGroupIds = allServerGroupIds.map(String);
                 const localGroups = await db.groups.toArray();
                 for (const lg of localGroups) {
@@ -200,6 +234,8 @@ const Sync = (() => {
                         await db.transactions.where('groupId').equals(lg.id).delete();
                     }
                 }
+            } else {
+                console.warn('[Sync] Skipping group cleanup because server returned no authoritative group list.');
             }
 
             // ---- Update state ----
@@ -284,13 +320,18 @@ const Sync = (() => {
 
     async function syncGroups() {
         const session = await Auth.getSession();
-        if (!session) return [];
+        if (!session) {
+            console.warn('[Sync] syncGroups: no session, returning []');
+            return [];
+        }
 
         try {
+            console.log('[Sync] syncGroups: fetching GET /api/sync/groups...');
             const data = await Api.request(`${API}/groups`, {
                 cache: 'no-store'
             });
             const { groups } = data;
+            console.log('[Sync] syncGroups: server returned', groups.length, 'groups');
             for (const g of groups) {
                 const gId = String(g._id || g.id);
                 await db.groups.put({
@@ -309,7 +350,8 @@ const Sync = (() => {
                 ...g,
                 id: String(g._id || g.id),
             }));
-        } catch {
+        } catch (err) {
+            console.warn('[Sync] syncGroups fetch FAILED, falling back to local DB:', err.message, err);
             return db.groups.toArray();
         }
     }
@@ -624,7 +666,7 @@ const Sync = (() => {
         addExpense, updateSettlementStatus, deleteExpense, getGroupTransactions,
         getGroupSyncIssues, retryGroupExpenseSync,
         getPendingCount, getFailedCount, retryFailed,
-        isSyncInProgress, getLastSyncTime, checkActualConnectivity,
+        isSyncInProgress, getLastSyncTime, resetSyncState, checkActualConnectivity,
         getGroupDetail, updateGroup, updateSettlementMode, archiveGroup, removeMember, leaveGroup,
         getJoinRequests, approveJoinRequest, rejectJoinRequest, rotateInviteCode,
         transferAdmin,

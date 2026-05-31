@@ -15,6 +15,12 @@ function generateRefreshToken() {
     return crypto.randomBytes(40).toString('hex');
 }
 
+/** Hash refresh token with SHA-256 before storing in DB.
+ *  SHA-256 is sufficient here — tokens are 80-char random hex (high entropy). */
+function hashToken(token) {
+    return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 function setRefreshCookie(res, token) {
     res.cookie('refreshToken', token, {
         httpOnly: true,
@@ -83,7 +89,7 @@ async function register(req, res) {
             email: normalizedEmail,
             password,
             upiId,
-            refreshToken,
+            refreshToken: hashToken(refreshToken),
         });
         await user.save();
 
@@ -117,7 +123,7 @@ async function login(req, res) {
         }
 
         const refreshToken = generateRefreshToken();
-        user.refreshToken = refreshToken;
+        user.refreshToken = hashToken(refreshToken);
         await user.save();
 
         const accessToken = generateAccessToken(user._id);
@@ -137,14 +143,14 @@ async function refresh(req, res) {
             return res.status(401).json({ error: 'No refresh token provided.' });
         }
 
-        const user = await User.findOne({ refreshToken: token });
+        const user = await User.findOne({ refreshToken: hashToken(token) });
         if (!user) {
             return res.status(401).json({ error: 'Invalid refresh token.' });
         }
 
         // Rotate refresh token
         const newRefreshToken = generateRefreshToken();
-        user.refreshToken = newRefreshToken;
+        user.refreshToken = hashToken(newRefreshToken);
         await user.save();
 
         const accessToken = generateAccessToken(user._id);
@@ -161,7 +167,7 @@ async function logout(req, res) {
     try {
         const token = req.cookies?.refreshToken;
         if (token) {
-            await User.findOneAndUpdate({ refreshToken: token }, { refreshToken: null });
+            await User.findOneAndUpdate({ refreshToken: hashToken(token) }, { refreshToken: null });
         }
         clearRefreshCookie(res);
         res.json({ message: 'Logged out successfully.' });

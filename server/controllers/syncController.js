@@ -5,8 +5,16 @@ const { pushPending, pullUpdates } = require('../services/syncService');
 // POST /api/sync - Push pending & paginated pull (BANDWIDTH OPTIMIZED)
 async function syncTransactions(req, res) {
     try {
-        const { lastSyncAt, pending: rawPending, limit = 100, groupIds: filterGroupIds } = req.body;
+        const {
+            lastSyncAt,
+            pending: rawPending,
+            limit = 100,
+            groupIds: filterGroupIds,
+            cursor,
+            syncWindowEnd,
+        } = req.body;
         const pending = Array.isArray(rawPending) ? rawPending : [];
+        const syncTime = syncWindowEnd || new Date().toISOString();
 
         // PUSH PHASE — delegated to syncService
         const { synced, errors } = await pushPending(pending, req.userId);
@@ -16,6 +24,8 @@ async function syncTransactions(req, res) {
             lastSyncAt,
             limit,
             filterGroupIds,
+            cursor,
+            syncWindowEnd: syncTime,
         });
 
         res.json({
@@ -24,8 +34,9 @@ async function syncTransactions(req, res) {
             serverAdds: pullResult.serverAdds,
             serverGroups: pullResult.serverGroups,
             allServerGroupIds: pullResult.allServerGroupIds,
-            syncTime: new Date().toISOString(),
+            syncTime,
             hasMore: pullResult.hasMore,
+            nextCursor: pullResult.nextCursor,
             pullGroupIds: pullResult.pullGroupIds,
         });
     } catch (err) {

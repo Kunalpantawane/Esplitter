@@ -8,16 +8,9 @@ const {
     updateSettlementStatus,
     deleteExpense,
     getGroupBalances,
-    createRazorpayOrder,
-    handleRazorpayWebhook,
-    getPaymentStatus,
-    verifyPayment,
 } = require('../controllers/expenseController');
 
 const router = express.Router();
-
-// Razorpay webhook must bypass auth and uses the raw request body for signature verification.
-router.post('/razorpay/webhook', (req, res) => handleRazorpayWebhook(req, res));
 
 router.use(authenticate);
 
@@ -31,15 +24,6 @@ router.delete('/client/:clientId', (req, res) => deleteExpense(req, res));
 
 // POST /api/expenses - Add a new expense (with validation)
 router.post('/', (req, res) => createExpense(req, res));
-
-// POST /api/expenses/razorpay/order - Create a secure Razorpay checkout order
-router.post('/razorpay/order', (req, res) => createRazorpayOrder(req, res));
-
-// GET /api/expenses/razorpay/status/:clientId - Get payment status (auth required)
-router.get('/razorpay/status/:clientId', (req, res) => getPaymentStatus(req, res));
-
-// POST /api/expenses/razorpay/verify/:clientId - Trigger manual verification (auth required)
-router.post('/razorpay/verify/:clientId', (req, res) => verifyPayment(req, res));
 
 // --- Parameterized routes ---
 

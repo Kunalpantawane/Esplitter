@@ -1,7 +1,7 @@
 // sw.js - Service Worker for offline caching
 
 // Bump version when app shell changes to force cache refresh on all clients
-const CACHE_NAME = 'esplitter-v4';
+const CACHE_NAME = 'esplitter-v6';
 
 // Local-only resources that MUST be cached for the app to work offline.
 // Do NOT include external CDN URLs here — a single network failure during install
@@ -22,7 +22,6 @@ const APP_SHELL = [
 // CDN resources we try to cache but won't fail install if unavailable
 const CDN_SHELL = [
     'https://unpkg.com/dexie@3/dist/dexie.js',
-    'https://checkout.razorpay.com/v1/checkout.js',
     'https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js',
 ];
 
@@ -48,11 +47,16 @@ self.addEventListener('install', (event) => {
 // Activate: clean up old caches
 self.addEventListener('activate', (event) => {
     event.waitUntil(
-        caches.keys().then((keys) =>
-            Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-        )
+        caches.keys().then(async (keys) => {
+            const oldAppCaches = keys.filter((key) => key.startsWith('esplitter-') && key !== CACHE_NAME);
+            await Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)));
+            await self.clients.claim();
+            if (oldAppCaches.length > 0) {
+                const windows = await self.clients.matchAll({ type: 'window' });
+                await Promise.all(windows.map((client) => client.navigate(client.url)));
+            }
+        })
     );
-    self.clients.claim();
 });
 
 // Fetch: Network-first for API, Cache-first for assets

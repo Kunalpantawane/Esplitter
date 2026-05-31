@@ -162,7 +162,7 @@ async function computeGroupBalances(groupId, options = {}) {
         deleted: { $ne: true },
         $or: [
             { type: { $ne: 'PAYMENT' } },
-            { status: { $ne: 'PENDING' } },
+            { type: 'PAYMENT', status: 'CONFIRMED' },
         ],
     })
         .select('paidBy amount splits type status receiverId')

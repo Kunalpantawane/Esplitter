@@ -12,7 +12,7 @@ const TrackerUI = (() => {
         const container = document.getElementById('tracker-content');
         if (!container) return;
 
-        container.innerHTML = '<div class="tracker-loading"><div class="sync-spinner"></div> Loading...</div>';
+        container.innerHTML = '<div class="flex flex-col items-center justify-center py-20 text-primary"><div class="sync-spinner mb-4"></div><span class="font-label-md tracking-widest uppercase">Analyzing Finances...</span></div>';
 
         const [analytics, categories, comparison, insights, budgetData, conflicts] = await Promise.all([
             Tracker.getAnalytics('month'),
@@ -25,196 +25,87 @@ const TrackerUI = (() => {
 
         let html = '';
 
-        const forecast = _buildForecast(analytics);
-
-        // Summary Cards
-        html += `<div class="tracker-summary-cards">
-            <div class="tracker-card tracker-card-total">
-                <div class="tracker-card-icon">💰</div>
-                <div class="tracker-card-body">
-                    <div class="tracker-card-label">This Month</div>
-                    <div class="tracker-card-value">₹${analytics.totalSpent.toFixed(0)}</div>
-                    <div class="tracker-card-sub">${analytics.count} expense${analytics.count !== 1 ? 's' : ''}</div>
-                </div>
+        // Monthly Overview Card
+        html += `
+        <section class="glass-card rounded-xl p-6 shadow-xl mb-8 relative overflow-hidden">
+            <div class="absolute top-0 right-0 w-32 h-32 emerald-gradient opacity-10 rounded-bl-[100px]"></div>
+            <div class="flex items-center justify-between mb-8">
+                <span class="font-label-md text-label-md font-bold uppercase tracking-widest text-primary">Monthly Overview</span>
+                <span class="material-symbols-outlined text-outline-variant">calendar_month</span>
             </div>
-            <div class="tracker-card tracker-card-week">
-                <div class="tracker-card-icon">📅</div>
-                <div class="tracker-card-body">
-                    <div class="tracker-card-label">This Week</div>
-                    <div class="tracker-card-value">₹${comparison.thisWeek.totalSpent.toFixed(0)}</div>
-                    <div class="tracker-card-sub ${comparison.weekChange > 0 ? 'negative' : 'positive'}">
-                        ${comparison.weekChange > 0 ? '↑' : '↓'} ${Math.abs(comparison.weekChange)}% vs last week
+            <div class="flex flex-col md:flex-row items-center gap-10">
+                <!-- Data Visualization -->
+                <div class="relative w-36 h-36 flex-shrink-0">
+                    <canvas id="tracker-pie-chart" width="144" height="144"></canvas>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                        <span class="text-[10px] text-outline-variant font-bold uppercase tracking-tighter">Total</span>
+                        <span class="text-xl font-extrabold text-on-surface">₹${analytics.totalSpent.toFixed(0)}</span>
+                    </div>
+                </div>
+                <div class="flex-grow text-center md:text-left space-y-4">
+                    <div>
+                        <p class="text-on-surface-variant font-label-sm uppercase tracking-widest mb-1">Spent so far</p>
+                        <h3 class="text-4xl font-extrabold text-on-surface tracking-tight">₹${analytics.totalSpent.toLocaleString('en-IN')}</h3>
+                    </div>
+                    <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full ${comparison.weekChange > 0 ? 'bg-error/10 text-error' : 'bg-primary/10 text-primary'}">
+                        <span class="material-symbols-outlined text-sm font-bold">${comparison.weekChange > 0 ? 'trending_up' : 'trending_down'}</span>
+                        <span class="font-label-sm font-bold uppercase tracking-tight">${Math.abs(comparison.weekChange)}% vs last week</span>
                     </div>
                 </div>
             </div>
-            <div class="tracker-card tracker-card-today">
-                <div class="tracker-card-icon">🕐</div>
-                <div class="tracker-card-body">
-                    <div class="tracker-card-label">Today</div>
-                    <div class="tracker-card-value">₹${(Object.values(analytics.byDay).length > 0 ? analytics.byDay[new Date().toISOString().slice(0, 10)] || 0 : 0).toFixed(0)}</div>
-                    <div class="tracker-card-sub">${new Date().toLocaleDateString('en-IN', { weekday: 'long' })}</div>
-                </div>
-            </div>
-        </div>`;
+            
+            <div id="tracker-pie-legend" class="mt-8 grid grid-cols-2 sm:grid-cols-3 gap-3"></div>
+        </section>`;
 
-        // Budget Quick Glance
+        // Budget Progress Section
         if (budgetData.budgets.length > 0) {
             const overallBudget = budgetData.budgets.find((b) => !b.category);
             if (overallBudget) {
                 const pct = overallBudget.percentage || 0;
-                const colorClass = pct > 100 ? 'budget-over' : pct > 80 ? 'budget-warn' : pct > 60 ? 'budget-mid' : 'budget-ok';
-                html += `<div class="tracker-budget-glance ${colorClass}">
-                    <div class="budget-glance-header">
-                        <span>Monthly Budget</span>
-                        <span>₹${overallBudget.spent?.toFixed(0) || 0} / ₹${overallBudget.amount}</span>
+                const progressColor = pct > 100 ? 'bg-error' : pct > 80 ? 'bg-tertiary' : 'bg-primary';
+                html += `
+        <section class="mb-8">
+            <div class="flex items-end justify-between mb-4">
+                <h3 class="font-headline-md text-on-surface">Monthly Budget</h3>
+                <div class="flex flex-col items-end">
+                    <span class="font-headline-md text-on-surface">₹${overallBudget.spent?.toLocaleString('en-IN') || 0}</span>
+                    <span class="text-[10px] text-outline-variant font-bold uppercase">of ₹${overallBudget.amount.toLocaleString('en-IN')} limit</span>
+                </div>
+            </div>
+            <div class="glass-card rounded-xl p-5 border border-outline-variant/10 shadow-lg">
+                <div class="space-y-3">
+                    <div class="h-3 w-full bg-surface-container rounded-full overflow-hidden p-0.5">
+                        <div class="h-full ${progressColor} rounded-full shadow-sm transition-all duration-1000" style="width: ${Math.min(pct, 100)}%"></div>
                     </div>
-                    <div class="budget-progress-bar">
-                        <div class="budget-progress-fill ${colorClass}" style="width: ${Math.min(pct, 100)}%"></div>
+                    <div class="flex justify-between items-center">
+                        <p class="text-label-sm font-bold ${pct > 100 ? 'text-error' : 'text-primary'} uppercase tracking-widest">${pct.toFixed(0)}% utilized</p>
+                        <span class="text-on-surface-variant text-[10px] uppercase font-bold tracking-widest">₹${(overallBudget.amount - (overallBudget.spent || 0)).toLocaleString('en-IN')} remaining</span>
                     </div>
-                    <div class="budget-glance-footer">${pct > 100 ? `⚠️ Over budget by ₹${(overallBudget.spent - overallBudget.amount).toFixed(0)}` : `₹${(overallBudget.amount - (overallBudget.spent || 0)).toFixed(0)} remaining`}</div>
-                </div>`;
+                </div>
+            </div>
+        </section>`;
             }
         }
 
-        // Forecast
-        html += `<div class="tracker-forecast">
-            <div class="tracker-section-header">
-                <h4 class="tracker-section-title">📅 Forecast</h4>
-                <span class="tracker-forecast-pill">Local-first</span>
+        // Recent Expenses List
+        html += `
+        <section class="space-y-4 pb-12">
+            <div class="flex items-center justify-between">
+                <h3 class="font-headline-md text-on-surface">Recent Activity</h3>
+                <button class="px-4 py-2 bg-surface-container rounded-full text-primary font-label-md hover:bg-primary/10 transition-colors" id="btn-view-all-expenses">View All</button>
             </div>
-            <div class="tracker-forecast-grid">
-                <div class="tracker-forecast-card tracker-forecast-main">
-                    <div class="tracker-forecast-label">Projected month-end spend</div>
-                    <div class="tracker-forecast-value">₹${forecast.projectedTotal.toFixed(0)}</div>
-                    <div class="tracker-forecast-sub">Based on ${forecast.elapsedDays} of ${forecast.daysInMonth} days</div>
-                </div>
-                <div class="tracker-forecast-card">
-                    <div class="tracker-forecast-label">Projected remaining</div>
-                    <div class="tracker-forecast-value ${forecast.delta >= 0 ? 'positive' : 'negative'}">${forecast.delta >= 0 ? '₹' + forecast.delta.toFixed(0) + ' over pace' : '₹' + Math.abs(forecast.delta).toFixed(0) + ' under pace'}</div>
-                    <div class="tracker-forecast-sub">Compared with current month pace</div>
-                </div>
-            </div>
-            <div class="tracker-forecast-cats">
-                ${forecast.categories.length > 0 ? forecast.categories.map((entry) => {
-                    const meta = Tracker.getCategoryMeta(entry.category);
-                    return `<div class="tracker-forecast-row">
-                        <div class="tracker-forecast-row-left">
-                            <span class="tracker-forecast-dot" style="background:${meta.color}"></span>
-                            <span>${escapeHtml(entry.category)}</span>
-                        </div>
-                        <div class="tracker-forecast-row-right">₹${entry.projected.toFixed(0)}</div>
-                    </div>`;
-                }).join('') : '<div class="tracker-forecast-empty">No spending data to forecast yet.</div>'}
-            </div>
-        </div>`;
-
-        // Sync conflicts
-        if (conflicts.length > 0) {
-            html += `<div class="tracker-conflicts">
-                <div class="tracker-section-header">
-                    <h4 class="tracker-section-title">⚠️ Sync Conflicts</h4>
-                    <span class="tracker-forecast-pill danger">Needs review</span>
-                </div>
-                ${conflicts.map((item) => {
-                    const meta = Tracker.getCategoryMeta(item.category);
-                    return `<div class="tracker-conflict-card" data-client-id="${item.clientId}">
-                        <div class="tracker-conflict-head">
-                            <div class="tracker-conflict-left">
-                                <span class="tracker-expense-cat" style="background:${meta.color}20; color:${meta.color}; width:34px; height:34px;">${meta.icon}</span>
-                                <div>
-                                    <div class="tracker-conflict-title">${escapeHtml(item.description || item.category)}</div>
-                                    <div class="tracker-conflict-meta">${escapeHtml(item.category)} · ₹${Number(item.amount || 0).toFixed(0)}</div>
-                                </div>
-                            </div>
-                            <button class="btn btn-secondary btn-xs btn-resolve-conflict" data-client-id="${item.clientId}">Retry sync</button>
-                        </div>
-                        <div class="tracker-conflict-reason">${escapeHtml(item.reason)}</div>
-                    </div>`;
-                }).join('')}
-            </div>`;
-        }
-
-        // Insights
-        if (insights.length > 0) {
-            html += `<div class="tracker-insights">
-                <h4 class="tracker-section-title">💡 Insights</h4>
-                ${insights.map((i) => `<div class="insight-card insight-${i.type}">
-                    <span class="insight-icon">${i.icon}</span>
-                    <span class="insight-text">${escapeHtml(i.text)}</span>
-                </div>`).join('')}
-            </div>`;
-        }
-
-        // Category Breakdown (Pie chart placeholder + legend)
-        html += `<div class="tracker-chart-section">
-            <h4 class="tracker-section-title">📊 Category Breakdown</h4>
-            <div class="tracker-chart-container">
-                <canvas id="tracker-pie-chart" width="240" height="240"></canvas>
-                <div class="tracker-chart-legend" id="tracker-pie-legend"></div>
-            </div>
-        </div>`;
-
-        // Spending Trend (Line chart)
-        html += `<div class="tracker-chart-section">
-            <h4 class="tracker-section-title">📈 Spending Trend</h4>
-            <div class="tracker-period-tabs">
-                <button class="period-tab ${_currentPeriod === '7days' ? 'active' : ''}" data-period="7days">7 Days</button>
-                <button class="period-tab ${_currentPeriod === '30days' ? 'active' : ''}" data-period="30days">30 Days</button>
-                <button class="period-tab ${_currentPeriod === 'month' ? 'active' : ''}" data-period="month">Month</button>
-            </div>
-            <div class="tracker-line-container">
-                <canvas id="tracker-line-chart" width="400" height="200"></canvas>
-            </div>
-        </div>`;
-
-        // Recent Expenses
-        html += `<div class="tracker-recent">
-            <div class="tracker-section-header">
-                <h4 class="tracker-section-title">🧾 Recent Expenses</h4>
-                <button class="btn btn-ghost btn-xs" id="btn-view-all-expenses">View All</button>
-            </div>
-            <div id="tracker-expense-list" class="tracker-expense-list"></div>
-        </div>`;
+            <div id="tracker-expense-list" class="space-y-3"></div>
+        </section>`;
 
         container.innerHTML = html;
 
         // Render charts
         _renderPieChart(analytics.byCategory, categories);
-        _renderLineChart(analytics.byDay);
         _renderRecentExpenses(await Tracker.getExpenses(), categories);
-
-        // Period tab listeners
-        container.querySelectorAll('.period-tab').forEach((tab) => {
-            tab.addEventListener('click', async () => {
-                container.querySelectorAll('.period-tab').forEach((t) => t.classList.remove('active'));
-                tab.classList.add('active');
-                _currentPeriod = tab.dataset.period;
-                const newAnalytics = await Tracker.getAnalytics(_currentPeriod);
-                _renderLineChart(newAnalytics.byDay);
-            });
-        });
 
         // View all button
         document.getElementById('btn-view-all-expenses')?.addEventListener('click', () => {
             showAllExpenses();
-        });
-
-        container.querySelectorAll('.btn-resolve-conflict').forEach((btn) => {
-            btn.addEventListener('click', async () => {
-                const original = btn.textContent;
-                btn.disabled = true;
-                btn.textContent = 'Retrying...';
-                try {
-                    await Tracker.retryExpenseSync(btn.dataset.clientId);
-                    UI.showToast('Conflict retry queued.', 'success');
-                    await renderDashboard();
-                } catch (err) {
-                    UI.showToast(err.message, 'error');
-                } finally {
-                    btn.disabled = false;
-                    btn.textContent = original;
-                }
-            });
         });
     }
 
@@ -277,11 +168,10 @@ const TrackerUI = (() => {
         legendContainer.innerHTML = entries.map(([cat, val]) => {
             const meta = Tracker.getCategoryMeta(cat);
             const pct = Math.round((val / total) * 100);
-            return `<div class="legend-item">
-                <span class="legend-dot" style="background:${meta.color}"></span>
-                <span class="legend-icon">${meta.icon}</span>
-                <span class="legend-name">${escapeHtml(cat)}</span>
-                <span class="legend-value">₹${val.toFixed(0)} <small>(${pct}%)</small></span>
+            return `<div class="bg-surface-container-low p-2 rounded-lg border border-outline-variant/10 flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full" style="background:${meta.color}"></span>
+                <span class="text-[10px] text-on-surface-variant font-bold truncate flex-1">${escapeHtml(cat)}</span>
+                <span class="text-[10px] font-extrabold text-on-surface">₹${val.toFixed(0)}</span>
             </div>`;
         }).join('');
     }
@@ -376,34 +266,37 @@ const TrackerUI = (() => {
 
         const recent = expenses.slice(0, limit);
         if (recent.length === 0) {
-            container.innerHTML = `<div class="tracker-empty">
-                <div class="empty-icon">🧾</div>
-                <p>No expenses yet — tap + to add your first!</p>
+            container.innerHTML = `<div class="text-center py-12 bg-surface-container-low rounded-2xl border border-dashed border-outline-variant/30">
+                <span class="material-symbols-outlined text-outline-variant text-4xl mb-2">receipt_long</span>
+                <p class="text-on-surface-variant font-label-md">No expenses recorded yet</p>
             </div>`;
             return;
         }
 
         container.innerHTML = recent.map((e) => {
             const meta = Tracker.getCategoryMeta(e.category);
-            const dateStr = new Date(e.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
-            const pmIcons = { cash: '💵', upi: '📱', card: '💳', other: '💸' };
-            return `<div class="tracker-expense-item" data-client-id="${e.clientId}">
-                <div class="tracker-expense-cat" style="background:${meta.color}20; color:${meta.color}">
+            const isToday = new Date(e.date).toDateString() === new Date().toDateString();
+            const dateStr = isToday ? 'Today' : new Date(e.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
+            const pmLabels = { cash: 'Cash', upi: 'UPI', card: 'Card', other: 'Other' };
+            return `<div class="glass-card p-4 rounded-xl flex items-center gap-4 hover:bg-surface-container-high transition-all cursor-pointer group tracker-expense-item" data-client-id="${e.clientId}">
+                <div class="w-12 h-12 rounded-full flex items-center justify-center text-2xl shadow-sm border border-outline-variant/10" style="background:${meta.color}20; color:${meta.color}">
                     ${meta.icon}
                 </div>
-                <div class="tracker-expense-info">
-                    <div class="tracker-expense-desc">${escapeHtml(e.description || e.category)}</div>
-                    <div class="tracker-expense-meta">${escapeHtml(e.category)} · ${dateStr} · ${pmIcons[e.paymentMethod] || '💸'}</div>
+                <div class="flex-1 min-w-0">
+                    <h4 class="font-label-md text-on-surface truncate">${escapeHtml(e.description || e.category)}</h4>
+                    <p class="text-[10px] text-on-surface-variant uppercase tracking-widest">${e.category} • ${dateStr}</p>
                 </div>
-                <div class="tracker-expense-amount">₹${Number(e.amount).toFixed(0)}</div>
-                ${e.syncStatus === 'PENDING' ? '<span class="tracker-pending-badge">⏳</span>' : ''}
+                <div class="text-right">
+                    <div class="font-bold text-on-surface">₹${Number(e.amount).toFixed(0)}</div>
+                    <div class="text-[10px] text-on-surface-variant font-bold">${pmLabels[e.paymentMethod]?.toUpperCase() || 'CASH'}</div>
+                </div>
             </div>`;
         }).join('');
 
-        // Click to delete
         container.querySelectorAll('.tracker-expense-item').forEach((item) => {
             item.addEventListener('click', () => {
-                _showExpenseDetail(expenses.find((e) => e.clientId === item.dataset.clientId));
+                const ex = expenses.find((e) => e.clientId === item.dataset.clientId);
+                if (ex) _showExpenseDetail(ex);
             });
         });
     }
@@ -441,16 +334,21 @@ const TrackerUI = (() => {
         const modal = document.getElementById('modal-personal-expense-detail');
         if (!modal) return;
 
-        modal.querySelector('.ped-icon').textContent = meta.icon;
-        modal.querySelector('.ped-icon').style.background = `${meta.color}20`;
-        modal.querySelector('.ped-icon').style.color = meta.color;
-        modal.querySelector('.ped-category').textContent = expense.category;
-        modal.querySelector('.ped-amount').textContent = `₹${Number(expense.amount).toFixed(2)}`;
-        modal.querySelector('.ped-desc').textContent = expense.description || '—';
-        modal.querySelector('.ped-date').textContent = dateStr;
-        modal.querySelector('.ped-payment').textContent = pmLabels[expense.paymentMethod] || 'Cash';
-        modal.querySelector('.ped-notes').textContent = expense.notes || '—';
-        modal.querySelector('.ped-sync').textContent = expense.syncStatus || 'SYNCED';
+        const iconEl = modal.querySelector('#ped-icon');
+        iconEl.textContent = meta.icon;
+        iconEl.style.background = `${meta.color}20`;
+        iconEl.style.color = meta.color;
+        
+        modal.querySelector('#ped-category').textContent = expense.category;
+        modal.querySelector('#ped-amount').textContent = `₹${Number(expense.amount).toFixed(2)}`;
+        modal.querySelector('#ped-desc').textContent = expense.description || '—';
+        modal.querySelector('#ped-date').textContent = dateStr;
+        modal.querySelector('#ped-payment').textContent = pmLabels[expense.paymentMethod] || 'Cash';
+        
+        const syncStatus = expense.syncStatus || 'SYNCED';
+        const syncEl = modal.querySelector('#ped-sync');
+        syncEl.textContent = syncStatus;
+        syncEl.className = `px-2 py-0.5 rounded font-label-sm font-bold uppercase tracking-tighter ${syncStatus === 'SYNCED' ? 'bg-primary/10 text-primary' : 'bg-error/10 text-error'}`;
 
         const deleteBtn = modal.querySelector('#btn-delete-personal-expense');
         deleteBtn.dataset.clientId = expense.clientId;
@@ -489,12 +387,12 @@ const TrackerUI = (() => {
                 </div>`;
             for (const e of items) {
                 const meta = Tracker.getCategoryMeta(e.category);
-                const pmIcons = { cash: '💵', upi: '📱', card: '💳', other: '💸' };
+                const pmIcons = { cash: 'Cash', upi: 'UPI', card: 'Card', other: 'Other' };
                 html += `<div class="tracker-expense-item" data-client-id="${e.clientId}">
                     <div class="tracker-expense-cat" style="background:${meta.color}20; color:${meta.color}">${meta.icon}</div>
                     <div class="tracker-expense-info">
                         <div class="tracker-expense-desc">${escapeHtml(e.description || e.category)}</div>
-                        <div class="tracker-expense-meta">${escapeHtml(e.category)} · ${pmIcons[e.paymentMethod] || '💸'}</div>
+                        <div class="tracker-expense-meta">${escapeHtml(e.category)} · ${pmIcons[e.paymentMethod] || 'Other'}</div>
                     </div>
                     <div class="tracker-expense-amount">₹${Number(e.amount).toFixed(0)}</div>
                 </div>`;
@@ -555,13 +453,13 @@ const TrackerUI = (() => {
         const categories = await Tracker.getCategories();
 
         let html = `<div class="budget-header-section">
-            <h4>📋 Budget Overview</h4>
+            <h4>Budget Overview</h4>
             <button class="btn btn-primary btn-sm" id="btn-add-budget">+ Set Budget</button>
         </div>`;
 
         if (data.budgets.length === 0) {
             html += `<div class="tracker-empty">
-                <div class="empty-icon">💰</div>
+                <div class="empty-icon">&mdash;</div>
                 <p>No budgets set yet.<br>Set a monthly budget to track your spending goals!</p>
             </div>`;
         } else {
@@ -569,7 +467,7 @@ const TrackerUI = (() => {
                 const pct = b.percentage || 0;
                 const colorClass = pct > 100 ? 'budget-over' : pct > 80 ? 'budget-warn' : pct > 60 ? 'budget-mid' : 'budget-ok';
                 const catName = b.category || 'Overall';
-                const catMeta = b.category ? Tracker.getCategoryMeta(b.category) : { icon: '💰', color: '#6366f1' };
+                const catMeta = b.category ? Tracker.getCategoryMeta(b.category) : { icon: '&bull;', color: '#71717a' };
                 return `<div class="budget-card ${colorClass}">
                     <div class="budget-card-header">
                         <div class="budget-card-cat">

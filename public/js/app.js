@@ -57,12 +57,7 @@ function setActiveNav(targetScreenId) {
 
 // ---- Greeting Helper ----
 function getGreeting(name) {
-    const hour = new Date().getHours();
-    let timeGreeting;
-    if (hour < 12) timeGreeting = 'Good morning';
-    else if (hour < 17) timeGreeting = 'Good afternoon';
-    else timeGreeting = 'Good evening';
-    return `${timeGreeting}, ${name}! 👋`;
+    return name ? `Hi, ${name}` : 'Hey there!';
 }
 
 // ---- Init ----
@@ -87,7 +82,8 @@ async function goToDashboard() {
     document.getElementById('bottom-nav')?.classList.remove('hidden');
     setActiveNav('screen-dashboard');
 
-    document.getElementById('user-name-badge').textContent = currentSession.user.name;
+        const userNameBadge = document.getElementById('user-name-badge');
+        if (userNameBadge) userNameBadge.textContent = currentSession.user.name || 'Member';
     
     // Update greeting
     const greetingEl = document.getElementById('greeting-text');
@@ -287,12 +283,12 @@ function updateSplitPreview() {
     const amount = parseFloat(document.getElementById('exp-amount').value) || 0;
     const members = currentGroup.members || [];
     if (!amount) {
-        UI.renderSplitPreview([], members);
+        UI.renderSplitPreview([], members, 0);
         return;
     }
 
     const splits = calculateCurrentSplits(amount);
-    UI.renderSplitPreview(splits, members);
+    UI.renderSplitPreview(splits, members, amount);
 }
 
 function calculateCurrentSplits(amount) {
@@ -514,12 +510,14 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
 });
 
 // ---- Profile ----
-document.getElementById('btn-profile').addEventListener('click', async () => {
+async function goToProfile() {
     UI.showScreen('screen-profile');
     setActiveNav('screen-profile');
     const session = await Auth.getSession();
     if (!session) return;
     document.getElementById('profile-email').textContent = session.user.email;
+    const profileDisplayName = document.getElementById('profile-display-name');
+    if (profileDisplayName) profileDisplayName.textContent = session.user.name || 'User Name';
     document.getElementById('profile-name').value = session.user.name || '';
     document.getElementById('profile-phone').value = session.user.phone || '';
     document.getElementById('profile-upi').value = session.user.upiId || '';
@@ -528,7 +526,9 @@ document.getElementById('btn-profile').addEventListener('click', async () => {
     document.getElementById('profile-error').textContent = '';
     document.getElementById('upi-msg').textContent = '';
     document.getElementById('upi-error').textContent = '';
-});
+}
+
+document.getElementById('btn-profile')?.addEventListener('click', goToProfile);
 
 document.getElementById('btn-profile-back').addEventListener('click', () => {
     goToDashboard();
@@ -546,7 +546,10 @@ document.getElementById('form-profile').addEventListener('submit', async (e) => 
             document.getElementById('profile-phone').value.trim()
         );
         currentSession = await Auth.getSession();
-        document.getElementById('user-name-badge').textContent = data.name;
+            const userNameBadge = document.getElementById('user-name-badge');
+            if (userNameBadge) userNameBadge.textContent = data.name || 'Member';
+            const profileDisplayName = document.getElementById('profile-display-name');
+            if (profileDisplayName) profileDisplayName.textContent = data.name || 'User Name';
         msg.textContent = '✅ Profile updated!';
     } catch (ex) {
         err.textContent = ex.message;
@@ -993,6 +996,29 @@ settlementSection.addEventListener('click', async (e) => {
         return;
     }
 
+    // 1b. Copy recipient UPI for manual payment or external app payment
+    if (e.target.closest('.btn-copy-upi')) {
+        const btn = e.target.closest('.btn-copy-upi');
+        const upiId = String(btn.dataset.upi || '').trim();
+        if (!upiId) {
+            UI.showToast('UPI ID is not available for this user.', 'warning');
+            return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(upiId);
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied!';
+            UI.showToast('UPI ID copied.', 'success');
+            setTimeout(() => {
+                btn.textContent = originalText;
+            }, 1200);
+        } catch (ex) {
+            UI.showToast('Could not copy UPI ID.', 'error');
+        }
+        return;
+    }
+
     // 2. Pay Now via Razorpay (Debtor pays)
     if (e.target.closest('.btn-pay-now')) {
         const btn = e.target.closest('.btn-pay-now');
@@ -1060,7 +1086,7 @@ document.querySelectorAll('.nav-item').forEach((item) => {
             await TrackerUI.renderDashboard();
             if (navigator.onLine) Tracker.syncPersonalExpenses();
         } else if (target === 'screen-profile') {
-            document.getElementById('btn-profile').click();
+            await goToProfile();
         }
     });
 });
@@ -1069,7 +1095,8 @@ document.querySelectorAll('.nav-item').forEach((item) => {
 document.getElementById('btn-quick-add')?.addEventListener('click', async () => {
     document.getElementById('pe-amount').value = '';
     document.getElementById('pe-description').value = '';
-    document.getElementById('pe-notes').value = '';
+    const notesInput = document.getElementById('pe-notes');
+    if (notesInput) notesInput.value = '';
     document.getElementById('pe-payment').value = 'cash';
     await TrackerUI.populateAddForm();
     UI.showModal('modal-add-personal-expense');
@@ -1092,7 +1119,8 @@ document.getElementById('btn-add-personal-expense-confirm')?.addEventListener('c
         ? new Date(document.getElementById('pe-date').value).toISOString()
         : new Date().toISOString();
     const paymentMethod = document.getElementById('pe-payment').value;
-    const notes = document.getElementById('pe-notes').value.trim();
+    const notesInput = document.getElementById('pe-notes');
+    const notes = notesInput ? notesInput.value.trim() : '';
 
     const btn = document.getElementById('btn-add-personal-expense-confirm');
     btn.disabled = true;

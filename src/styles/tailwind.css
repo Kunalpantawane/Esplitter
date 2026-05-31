@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Tailwind CSS - Layout, spacing, utility system
+ * Purpose: Typography, spacing, layout, grid, flex, responsive
+ * DO NOT: Add component-specific styles here
+ */

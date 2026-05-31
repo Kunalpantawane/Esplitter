@@ -1,0 +1,35 @@
+/*
+ * Main CSS Entry Point
+ * Load order: tailwind -> theme -> glass -> animations
+ */
+
+@import './tailwind.css';
+@import './theme.css';
+@import './glass.css';
+@import './animations.css';
+
+/* 
+ * Component-specific overrides go here ONLY if they require
+ * both Tailwind utilities AND custom CSS (rare cases)
+ */
+
+/* Reset base */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  font-family: var(--font-manrope);
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Utility */
+.hidden {
+  display: none !important;
+}

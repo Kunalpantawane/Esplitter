@@ -19,19 +19,55 @@ const personalExpenseRoutes = require('./routes/personalExpenses');
 const categoryRoutes = require('./routes/categories');
 const budgetRoutes = require('./routes/budgets');
 const Category = require('./models/Category');
-const { handleRazorpayWebhook } = require('./controllers/expenseController');
-const { initializeRedis } = require('./config/redis');
 
 const app = express();
 
-// Security headers
+// Security headers - Enable CSP with nonce for inline scripts
+app.use((req, res, next) => {
+  res.locals.nonce = require('crypto').randomBytes(16).toString('hex');
+  next();
+});
+
 app.use(helmet({
-  contentSecurityPolicy: false, // Disable CSP for now (inline scripts used)
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: [
+        "'self'",
+        "'unsafe-inline'", // TODO: Remove after migrating to Vite modules
+        "https://cdn.tailwindcss.com",
+        "https://unpkg.com",
+        "https://cdn.jsdelivr.net",
+      ],
+      styleSrc: [
+        "'self'",
+        "'unsafe-inline'",
+        "https://fonts.googleapis.com",
+      ],
+      fontSrc: [
+        "'self'",
+        "https://fonts.gstatic.com",
+      ],
+      imgSrc: [
+        "'self'",
+        "data:",
+        "https:",
+      ],
+      connectSrc: [
+        "'self'",
+        "https://unpkg.com",
+        "https://cdn.jsdelivr.net",
+        "https://cdn.tailwindcss.com",
+        "https://fonts.googleapis.com",
+        "https://fonts.gstatic.com",
+      ],
+    },
+  },
 }));
 
-// CORS — explicit origin allowlist (open reflection + credentials is a security risk)
-// Set CORS_ORIGINS in your .env / Vercel dashboard as a comma-separated list of allowed origins.
-const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000')
+// CORS — explicit origin allowlist only
+// Set CORS_ORIGINS in your .env / Vercel dashboard as a comma-separated list.
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:3000')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
@@ -40,13 +76,11 @@ app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no Origin header (server-to-server, mobile apps, curl)
     if (!origin) return callback(null, true);
-    // Allow explicit allowlist
+    // Allow explicit allowlist only (no wildcards)
     if (ALLOWED_ORIGINS.includes(origin)) return callback(null, origin);
-    // Allow any Vercel preview deployment automatically
-    if (/^https:\/\/[^.]+\.vercel\.app$/.test(origin)) return callback(null, origin);
     callback(new Error('Not allowed by CORS'));
   },
-  credentials: true, // Allow cookies / Authorization headers
+  credentials: true,
 }));
 
 // General API rate limiter — relaxed, 600 requests per 15 minutes
@@ -56,23 +90,13 @@ const apiLimiter = rateLimit({
   message: { error: 'Too many requests. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
-    skip: (req) => req.originalUrl === '/api/expenses/razorpay/webhook',
 });
 
 // Body parsing & cookies
-app.use(express.json({
-  limit: '1mb',
-  verify: (req, res, buf) => {
-    if (req.originalUrl === '/api/expenses/razorpay/webhook') {
-      req.rawBody = Buffer.from(buf);
-    }
-  },
-}));
+app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 app.use(express.static('public'));
 app.use('/images', express.static('images'));
-
-app.post('/api/expenses/razorpay/webhook', (req, res) => handleRazorpayWebhook(req, res));
 
 // Routes
 // Note: /api/auth has its own strict 15req/15min rate limiter defined inside authRoutes
@@ -132,7 +156,6 @@ if (shouldAutoConnect) {
     .connect(MONGODB_URI)
     .then(async () => {
       console.log('✅ Connected to MongoDB');
-      await initializeRedis();
       // Seed default categories
       try { await Category.seedDefaults(); } catch (e) { console.warn('Category seed skip:', e.message); }
       // Only listen if executed directly (local dev). Vercel requires exporting the app instead.

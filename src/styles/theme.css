@@ -1,0 +1,61 @@
+/*
+ * Theme CSS - Design tokens, CSS variables
+ * Purpose: Color tokens, spacing variables, font stacks
+ * DO NOT: Component styles
+ */
+
+:root {
+  /* Colors - Semantic */
+  --color-bg-primary: #FAFAFA;
+  --color-bg-secondary: #ffffff;
+  --color-bg-card: #ffffff;
+  --color-bg-input: #F4F4F5;
+
+  --color-accent: #2E7D32;
+  --color-accent-hover: #256B29;
+  --color-accent-light: rgba(46, 125, 50, 0.08);
+  --color-accent-warm: #388E3C;
+
+  --color-success: #2E7D32;
+  --color-warning: #E65100;
+  --color-danger: #C62828;
+
+  /* Text */
+  --color-text-primary: #18181B;
+  --color-text-secondary: #71717A;
+  --color-text-muted: #A1A1AA;
+
+  /* Borders */
+  --color-border: rgba(0, 0, 0, 0.08);
+  --color-border-subtle: rgba(0, 0, 0, 0.05);
+  --color-border-glass: rgba(0, 0, 0, 0.05);
+
+  /* Spacing */
+  --radius: 24px;
+  --radius-sm: 12px;
+  --radius-lg: 24px;
+
+  /* Transitions */
+  --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Shadows */
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.03);
+  --shadow-sm: 0 4px 16px rgba(0, 0, 0, 0.03);
+
+  /* Font */
+  --font-geist: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-manrope: 'Manrope', sans-serif;
+}
+
+/* Dark mode */
+.dark {
+  --color-bg-primary: #121212;
+  --color-bg-secondary: #1E1E1E;
+  --color-bg-card: #252525;
+  --color-bg-input: #2A2A2A;
+
+  --color-text-primary: #FAFAFA;
+  --color-text-secondary: #A1A1AA;
+  --color-text-muted: #71717A;
+}

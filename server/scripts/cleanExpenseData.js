@@ -4,8 +4,12 @@
  */
 
 require('dotenv').config();
+const dns = require('dns');
 const mongoose = require('mongoose');
 const connectDB = require('../config/db');
+
+// Use the same DNS workaround as the main server so SRV MongoDB URIs resolve reliably.
+dns.setServers(['8.8.8.8', '8.8.4.4']);
 
 const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/esplitter';
 
@@ -15,14 +19,12 @@ async function cleanExpenseData() {
         await connectDB(MONGO_URI);
         console.log('📦 Connected to MongoDB');
 
-        // Collections to delete (all expense-related)
-        const collectionsToDelete = [
-            'transactions',     // All expenses and payments
-            'groups',          // Group records
-            'personalexpenses', // Personal expense tracker
-            'categories',      // Expense categories
-            'budgets',         // Budget records
-        ];
+        // Delete every non-auth collection so only login data remains.
+        const protectedCollections = new Set(['users']);
+        const allCollections = await mongoose.connection.db.listCollections().toArray();
+        const collectionsToDelete = allCollections
+            .map((collection) => collection.name)
+            .filter((name) => !protectedCollections.has(name) && !name.startsWith('system.'));
 
         console.log('\n🗑️  Cleaning expense data...');
 

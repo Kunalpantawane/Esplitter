@@ -110,11 +110,22 @@ const UI = (() => {
         let html = '';
         for (let i = 0; i < count; i++) {
             html += `
-                <div class="skeleton-card">
-                    <div class="skeleton skeleton-avatar"></div>
-                    <div class="skeleton-card-content">
-                        <div class="skeleton skeleton-text"></div>
-                        <div class="skeleton skeleton-text short"></div>
+                <div class="glass-card p-6 rounded-lg shadow-[0_8px_32px_rgba(15,143,111,0.08)] animate-pulse">
+                    <div class="flex justify-between items-start mb-6">
+                        <div class="space-y-3 w-3/4">
+                            <div class="h-6 bg-surface-variant rounded w-full"></div>
+                            <div class="h-4 bg-surface-variant rounded w-1/2"></div>
+                        </div>
+                    </div>
+                    <div class="space-y-4">
+                        <div class="space-y-2">
+                            <div class="h-4 bg-surface-variant rounded w-1/4"></div>
+                            <div class="h-5 bg-surface-variant rounded w-1/3"></div>
+                        </div>
+                        <div class="flex items-center justify-between pt-4 border-t border-white/20">
+                            <div class="h-4 bg-surface-variant rounded w-1/4"></div>
+                            <div class="h-6 bg-surface-variant rounded-full w-16"></div>
+                        </div>
                     </div>
                 </div>
             `;
@@ -148,7 +159,7 @@ const UI = (() => {
         const list = document.getElementById('groups-list');
         if (!groups || groups.length === 0) {
             list.innerHTML = `<div class="empty-state">
-                <div class="empty-icon">🌟</div>
+                <div class="empty-icon">&mdash;</div>
                 <p>Your journey starts here!<br>Create or join a group to begin splitting expenses.</p>
             </div>`;
             return;
@@ -166,16 +177,34 @@ const UI = (() => {
         list.innerHTML = sortedGroups
             .map((g) => {
                 const activity = g.lastActivityAt ? _timeAgo(new Date(g.lastActivityAt)) : '';
-                const archiveStyle = g.isArchived ? 'opacity: 0.6; background-color: #f9f9f9;' : '';
-                const archiveBadge = g.isArchived ? '<span class="badge" style="background:#ddd; color:#555; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-left: 8px;">Archived</span>' : '';
+                const archiveStyle = g.isArchived ? 'opacity: 0.6; filter: grayscale(100%);' : '';
+                const archiveBadge = g.isArchived ? '<span class="bg-surface-variant text-on-surface-variant px-3 py-1 rounded-full font-label-sm text-label-sm">Archived</span>' : '<span class="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full font-label-sm text-label-sm">Active</span>';
+                
                 return `
-        <div class="group-card" data-id="${g.id || g._id}" style="${archiveStyle}">
-          <div>
-            <div class="group-card-name">${escapeHtml(g.name)}${archiveBadge}</div>
-            <div class="group-card-meta">${(g.members || []).length} member(s) · Code: <strong>${g.inviteCode || '—'}</strong></div>
-            ${activity ? `<div class="group-card-activity">${activity}</div>` : ''}
+        <div class="group-card glass-card p-6 rounded-lg shadow-[0_8px_32px_rgba(15,143,111,0.08)] hover:shadow-[0_12px_48px_rgba(15,143,111,0.12)] transition-all group cursor-pointer relative overflow-hidden" data-id="${g.id || g._id}" style="${archiveStyle}">
+          <div class="absolute top-0 right-0 p-4 opacity-20 group-hover:opacity-40 transition-opacity">
+            <span class="material-symbols-outlined text-6xl text-primary">group</span>
           </div>
-          <span class="group-card-arrow">›</span>
+          <div class="flex justify-between items-start mb-6">
+            <div>
+              <h3 class="font-headline-md text-headline-md text-primary mb-1">${escapeHtml(g.name)}</h3>
+              <div class="flex items-center gap-2 text-on-surface-variant">
+                <span class="material-symbols-outlined text-[18px]">group</span>
+                <span class="font-label-sm text-label-sm">${(g.members || []).length} members</span>
+              </div>
+            </div>
+            <span class="material-symbols-outlined text-primary group-hover:translate-x-1 transition-transform">chevron_right</span>
+          </div>
+          <div class="space-y-4">
+            <div>
+              <span class="text-on-surface-variant font-label-sm text-label-sm block mb-1">Invite Code</span>
+              <span class="font-headline-md text-on-surface text-lg">${g.inviteCode || '—'}</span>
+            </div>
+            <div class="flex items-center justify-between pt-4 border-t border-white/20">
+              <span class="font-label-sm text-label-sm text-on-surface-variant italic">${activity || 'No activity'}</span>
+              ${archiveBadge}
+            </div>
+          </div>
         </div>`;
             })
             .join('');
@@ -238,7 +267,7 @@ const UI = (() => {
         });
 
         for (const tx of transactions) {
-            if (tx.status === 'PENDING') continue; // Ignore pending payments
+            if (tx.type === 'PAYMENT' && tx.status !== 'CONFIRMED') continue;
 
             const payerId = String(tx.paidBy);
             if (net[payerId] !== undefined) net[payerId] += Number(tx.amount);
@@ -300,7 +329,7 @@ const UI = (() => {
         };
 
         for (const tx of transactions) {
-            if (tx.status === 'PENDING') continue;
+            if (tx.type === 'PAYMENT' && tx.status !== 'CONFIRMED') continue;
 
             const payerId = String(tx.paidBy);
             const amount = Number(tx.amount) || 0;
@@ -368,48 +397,53 @@ const UI = (() => {
             .filter(tx => (tx.type || 'EXPENSE') === 'EXPENSE')
             .reduce((sum, tx) => sum + Number(tx.amount), 0);
 
-        let html = `<div class="balance-header">
-            <h4>💰 Balances</h4>
-            <div class="total-spending">Total: <strong>₹${totalSpending.toFixed(2)}</strong></div>
-        </div>`;
+        container.className = 'glass-card rounded-xl p-6 animate-fade-in relative overflow-hidden';
+
+        let html = `<div class="absolute top-0 right-0 p-4 opacity-10">
+            <span class="material-symbols-outlined text-6xl text-primary">account_balance</span>
+        </div>
+        <div class="flex justify-between items-center mb-6 relative z-10">
+            <h2 class="font-headline-md text-on-surface">Balances</h2>
+            <span class="bg-primary-fixed text-on-primary-fixed px-4 py-1.5 rounded-full font-label-md">Total: ₹${totalSpending.toFixed(2)}</span>
+        </div>
+        <div class="space-y-4 relative z-10">`;
 
         if (!transactions.length) {
-            html += `<p class="balance-empty">No transactions yet.</p>`;
+            html += `<p class="text-on-surface-variant font-label-md text-center py-4">No transactions yet.</p></div>`;
             container.innerHTML = html;
             return;
         }
 
-        // Show "A owes B" format
-        if (debts.length > 0) {
-            html += debts.map(d => {
-                const fromName = _getMemberName(members, d.from, myId);
-                const toName = _getMemberName(members, d.to, myId);
-                return `<div class="debt-row">
-                    <span class="debt-text">${escapeHtml(fromName)} owes ${escapeHtml(toName)}</span>
-                    <span class="debt-amount">₹${d.amount.toFixed(2)}</span>
-                </div>`;
-            }).join('');
-        } else {
-            html += `<div class="all-settled">
-                <span class="settled-icon">✅</span>
-                <span>All settled up!</span>
-            </div>`;
-        }
+        Object.entries(net).forEach(([id, amount]) => {
+            const name = _getMemberName(members, id, myId);
+            const isPositive = amount >= -0.01;
+            const amtStr = `₹${Math.abs(amount).toFixed(2)}`;
+            const colorCls = isPositive && amount > 0.01 ? 'text-primary' : (amount < -0.01 ? 'text-error' : 'text-on-surface');
+            const sign = isPositive && amount > 0.01 ? '+' : (amount < -0.01 ? '-' : '');
+            const initial = name.charAt(0).toUpperCase();
 
-        // Show net per person
-        html += `<div class="net-section"><h5>Net per person</h5>`;
-        html += Object.entries(net)
-            .map(([id, amount]) => {
-                const name = _getMemberName(members, id, myId);
-                const cls = amount >= 0 ? 'positive' : 'negative';
-                const sign = amount >= 0 ? '+' : '';
-                return `<div class="balance-row">
-                    <span class="balance-name">${escapeHtml(name)}</span>
-                    <span class="balance-amount ${cls}">${sign}₹${Math.abs(amount).toFixed(2)}</span>
-                </div>`;
-            })
-            .join('');
-        html += `</div>`;
+            // Pseudo-random background based on char code
+            const bgClass = ['bg-primary-container/20 text-primary', 'bg-tertiary-fixed-dim/20 text-tertiary', 'bg-surface-container-high text-on-surface-variant'][initial.charCodeAt(0) % 3];
+
+            html += `<div class="flex justify-between items-center">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full ${bgClass} flex items-center justify-center font-bold">${initial}</div>
+                    <span class="font-label-md">${escapeHtml(name)}</span>
+                </div>
+                <span class="${colorCls} font-bold">${sign}${amtStr}</span>
+            </div>`;
+        });
+
+        const myNet = net[myId] || 0;
+        const myNetStr = `₹${Math.abs(myNet).toFixed(2)}`;
+        const myNetSign = myNet > 0.01 ? '+' : (myNet < -0.01 ? '-' : '');
+        const myNetColor = myNet > 0.01 ? 'text-primary' : (myNet < -0.01 ? 'text-error' : 'text-on-surface');
+
+        html += `<div class="border-t border-outline-variant/20 pt-4 flex justify-between items-center mt-2">
+            <span class="text-on-surface-variant font-label-md">Your Net Balance</span>
+            <span class="${myNetColor} font-headline-md font-bold">${myNetSign}${myNetStr}</span>
+        </div>
+        </div>`;
 
         container.innerHTML = html;
     }
@@ -420,25 +454,30 @@ const UI = (() => {
 
         // Find existing pending requests related to me
         const myPendingPayments = transactions.filter(tx => tx.type === 'PAYMENT' && tx.status === 'PENDING' && String(tx.paidBy) === myId);
-        const othersPendingRequestsToMe = transactions.filter(tx => tx.type === 'PAYMENT' && tx.status === 'PENDING' && tx.splits && String(tx.splits[0].userId) === myId);
+        const myPaidPayments = transactions.filter(tx => tx.type === 'PAYMENT' && tx.status === 'PAID' && String(tx.paidBy) === myId);
+        const myRequestedPayments = transactions.filter(tx => tx.type === 'PAYMENT' && tx.status === 'PENDING' && tx.splits && String(tx.splits[0].userId) === myId);
+        const paymentsToConfirm = transactions.filter(tx => tx.type === 'PAYMENT' && tx.status === 'PAID' && tx.splits && String(tx.splits[0].userId) === myId);
 
         // Filter debts involving current user
         const myDebts = debts.filter(d => d.from === myId); // I owe someone
         const owedToMe = debts.filter(d => d.to === myId);   // Someone owes me
 
-        if (myDebts.length === 0 && owedToMe.length === 0 && myPendingPayments.length === 0 && othersPendingRequestsToMe.length === 0) {
+        if (myDebts.length === 0 && owedToMe.length === 0 && myPendingPayments.length === 0 && myPaidPayments.length === 0 && myRequestedPayments.length === 0 && paymentsToConfirm.length === 0) {
             container.innerHTML = '';
             return;
         }
 
-        const modeLabel = mode === 'normal' ? 'Normal' : 'Smart';
-        let html = `<div class="settlement-header">
-            <h4>🤝 Settlements</h4>
-            <label class="settlement-toggle"${!isAdmin ? ' title="Only the group admin can change settlement mode"' : ''}>
-                <input type="checkbox" data-settlement-mode ${mode === 'smart' ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''} />
-                <span>Smart${!isAdmin ? ' (Admin only)' : ''}</span>
-            </label>
-        </div>`;
+        const modeLabel = mode === 'normal' ? 'Normal Mode' : '⚡ Smart Mode';
+        let html = `<div class="flex justify-between items-center mb-4">
+            <h2 class="font-headline-md text-on-surface">Settlements</h2>
+            <div class="flex items-center gap-2 bg-surface-container-high p-1 rounded-full px-4" ${!isAdmin ? 'title="Only the group admin can change settlement mode"' : ''}>
+                <label class="flex items-center cursor-pointer gap-2 ${!isAdmin ? 'opacity-70' : ''}">
+                    <input type="checkbox" data-settlement-mode class="hidden" ${mode === 'smart' ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''} />
+                    <span class="text-label-sm font-bold text-primary whitespace-nowrap">${modeLabel}</span>
+                </label>
+            </div>
+        </div>
+        <div class="space-y-3">`;
 
         // Render My Pending Payments (I need to pay)
         html += myPendingPayments.map(tx => {
@@ -446,105 +485,105 @@ const UI = (() => {
             const creditorName = _getMemberName(members, creditorId, myId);
             const creditorMember = members.find(m => (m.id || String(m._id)) === creditorId);
             const toUpi = creditorMember ? creditorMember.upiId : '';
-            return `<div class="settle-card settle-owe">
-                <div class="settle-info">
-                    <span class="settle-label" style="color:#d97706">Payment Requested By</span>
-                    <span class="settle-target">${escapeHtml(creditorName)}</span>
+            const hasUpi = Boolean(toUpi);
+            return `<div class="glass-card rounded-lg p-5 border-l-4 border-l-[#d97706] flex justify-between items-center gap-4">
+                <div class="flex flex-col gap-1 min-w-0">
+                    <p class="font-body-md text-on-surface truncate">
+                        Requested by <span class="font-bold">${escapeHtml(creditorName)}</span>
+                    </p>
+                    <span class="text-headline-md font-extrabold text-on-surface">₹${Number(tx.amount).toFixed(2)}</span>
+                    <p class="text-label-sm text-on-surface-variant truncate">UPI: ${hasUpi ? escapeHtml(toUpi) : 'Not set'}</p>
                 </div>
-                <div class="settle-right">
-                    <span class="settle-amt">₹${Number(tx.amount).toFixed(2)}</span>
-                    <button class="btn btn-primary btn-xs btn-pay-now"
-                        data-tx-id="${tx.serverId || ''}"
-                        data-client-id="${tx.clientId}"
-                        data-group="${groupId}"
-                        data-to="${creditorId}" data-to-name="${escapeHtml(creditorName)}"
-                        data-amt="${Number(tx.amount).toFixed(2)}"
-                        data-upi="${escapeHtml(toUpi || '')}"
-                        data-settlement-mode="${modeLabel}">
-                        Pay Now
+                <div class="flex flex-col items-end gap-2 shrink-0">
+                    <button class="btn-copy-upi emerald-gradient text-white px-5 py-2 rounded-full font-label-md shadow-md active:scale-95 duration-200 disabled:opacity-50 disabled:cursor-not-allowed shrink-0" data-upi="${escapeHtml(toUpi || '')}" ${hasUpi ? '' : 'disabled'}>
+                        ${hasUpi ? 'Copy UPI' : 'UPI not set'}
                     </button>
-                    <button class="btn btn-ghost btn-xs btn-mark-paid-manual" data-client-id="${tx.clientId}" data-tx-id="${tx.serverId || ''}">Mark Paid</button>
+                    <button class="btn-mark-paid-manual border-2 border-primary text-primary px-5 py-2 rounded-full font-label-md hover:bg-primary/5 active:scale-95 duration-200 shrink-0" data-client-id="${tx.clientId}" data-tx-id="${tx.serverId || ''}">Mark Paid</button>
                 </div>
             </div>`;
         }).join('');
 
-        // Render Others Pending Requests To Me (I requested payment, waiting for confirmation)
-        html += othersPendingRequestsToMe.map(tx => {
+        html += myPaidPayments.map(tx => {
+            const creditorName = _getMemberName(members, tx.splits[0].userId, myId);
+            return `<div class="glass-card rounded-lg p-5 border-l-4 border-l-[#d97706] flex justify-between items-center gap-4">
+                <div class="flex flex-col gap-1 min-w-0">
+                    <p class="font-body-md text-on-surface truncate">Paid to <span class="font-bold">${escapeHtml(creditorName)}</span></p>
+                    <span class="text-headline-md font-extrabold text-on-surface">&#8377;${Number(tx.amount).toFixed(2)}</span>
+                </div>
+                <span class="text-label-sm text-on-surface-variant text-right shrink-0">Await confirmation</span>
+            </div>`;
+        }).join('');
+
+        // Payment request exists; creditor must wait until debtor marks it paid.
+        html += myRequestedPayments.map(tx => {
             const debtorId = String(tx.paidBy);
             const debtorName = _getMemberName(members, debtorId, myId);
-            return `<div class="settle-card settle-owed">
-                <div class="settle-info">
-                    <span class="settle-label" style="color:#d97706">Pending Payment From</span>
-                    <span class="settle-target">${escapeHtml(debtorName)}</span>
+            return `<div class="glass-card rounded-lg p-5 border-l-4 border-l-primary flex justify-between items-center gap-4">
+                <div class="flex flex-col gap-1 min-w-0">
+                    <p class="font-body-md text-on-surface truncate">
+                        Pending from <span class="font-bold">${escapeHtml(debtorName)}</span>
+                    </p>
+                    <span class="text-headline-md font-extrabold text-primary">₹${Number(tx.amount).toFixed(2)}</span>
                 </div>
-                <div class="settle-right">
-                    <span class="settle-amt positive">₹${Number(tx.amount).toFixed(2)}</span>
-                    <button class="btn btn-primary btn-xs btn-confirm-receipt" data-client-id="${tx.clientId}" data-tx-id="${tx.serverId || ''}">Confirm Receipt</button>
+                <span class="text-label-sm text-on-surface-variant text-right shrink-0">Await payment</span>
+            </div>`;
+        }).join('');
+
+        html += paymentsToConfirm.map(tx => {
+            const debtorName = _getMemberName(members, tx.paidBy, myId);
+            return `<div class="glass-card rounded-lg p-5 border-l-4 border-l-primary flex justify-between items-center gap-4">
+                <div class="flex flex-col gap-1 min-w-0">
+                    <p class="font-body-md text-on-surface truncate">Paid by <span class="font-bold">${escapeHtml(debtorName)}</span></p>
+                    <span class="text-headline-md font-extrabold text-primary">&#8377;${Number(tx.amount).toFixed(2)}</span>
                 </div>
+                <button class="btn-confirm-receipt bg-primary text-on-primary px-5 py-2 rounded-full font-label-md shadow-md active:scale-95 duration-200 shrink-0"
+                    data-client-id="${tx.clientId}" data-tx-id="${tx.serverId || ''}">Confirm</button>
             </div>`;
         }).join('');
 
         // Render remaining debts (not yet requested/pending)
         if (myDebts.length > 0) {
             html += myDebts.map(d => {
-                // Ignore if we already have a pending payment for this debt
-                if (myPendingPayments.some(tx => String(tx.splits[0].userId) === d.to)) return '';
+                if (myPendingPayments.some(tx => String(tx.splits[0].userId) === d.to)
+                    || myPaidPayments.some(tx => String(tx.splits[0].userId) === d.to)) return '';
                 const toName = _getMemberName(members, d.to, myId);
-                const toMember = members.find(m => (m.id || String(m._id)) === d.to);
-                const toUpi = toMember ? toMember.upiId : '';
-                return `<div class="settle-card settle-owe">
-                    <div class="settle-info">
-                        <span class="settle-label">You owe</span>
-                        <span class="settle-target">${escapeHtml(toName)}</span>
+                return `<div class="glass-card rounded-lg p-5 border-l-4 border-l-error flex justify-between items-center gap-4">
+                    <div class="flex flex-col gap-1 min-w-0">
+                        <p class="font-body-md text-on-surface truncate">
+                            You owe <span class="font-bold">${escapeHtml(toName)}</span>
+                        </p>
+                        <span class="text-headline-md font-extrabold text-error">₹${d.amount.toFixed(2)}</span>
                     </div>
-                    <div class="settle-right">
-                        <span class="settle-amt">₹${d.amount.toFixed(2)}</span>
-                        <button class="btn btn-primary btn-xs btn-pay-now"
-                            data-group="${groupId}"
-                            data-to="${d.to}" data-to-name="${escapeHtml(toName)}"
-                            data-amt="${d.amount.toFixed(2)}"
-                            data-upi="${escapeHtml(toUpi || '')}"
-                            data-settlement-mode="${modeLabel}">
-                            Pay Now
-                        </button>
-                    </div>
+                    <span class="text-label-sm text-on-surface-variant text-right shrink-0">Await payment request</span>
                 </div>`;
             }).join('');
         }
 
         if (owedToMe.length > 0) {
             html += owedToMe.map(d => {
-                // Ignore if we already requested a payment for this debt
-                if (othersPendingRequestsToMe.some(tx => String(tx.paidBy) === d.from)) return '';
+                if (myRequestedPayments.some(tx => String(tx.paidBy) === d.from) || paymentsToConfirm.some(tx => String(tx.paidBy) === d.from)) return '';
                 const fromName = _getMemberName(members, d.from, myId);
-                return `<div class="settle-card settle-owed">
-                    <div class="settle-info">
-                        <span class="settle-label">Owed by</span>
-                        <span class="settle-target">${escapeHtml(fromName)}</span>
+                return `<div class="glass-card rounded-lg p-5 border-l-4 border-l-primary flex justify-between items-center gap-4">
+                    <div class="flex flex-col gap-1 min-w-0">
+                        <p class="font-body-md text-on-surface truncate">
+                            Owes you <span class="font-bold">${escapeHtml(fromName)}</span>
+                        </p>
+                        <span class="text-headline-md font-extrabold text-primary">₹${d.amount.toFixed(2)}</span>
                     </div>
-                    <div class="settle-right">
-                        <span class="settle-amt positive">₹${d.amount.toFixed(2)}</span>
-                        <button class="btn btn-secondary btn-xs btn-request-payment"
-                            data-group="${groupId}"
-                            data-from="${d.from}"
-                            data-amt="${d.amount.toFixed(2)}">
-                            Request Payment
-                        </button>
-                    </div>
+                    <button class="btn-request-payment bg-surface-variant text-on-surface px-4 py-2 rounded-full font-label-md hover:bg-surface-dim transition-colors shrink-0"
+                        data-group="${groupId}" data-from="${d.from}" data-amt="${d.amount.toFixed(2)}">Request</button>
                 </div>`;
             }).join('');
         }
 
+        html += `</div>`;
         container.innerHTML = html;
     }
 
     function _renderExpenses(transactions, members, session, group) {
         const list = document.getElementById('expense-list');
         if (!transactions.length) {
-            list.innerHTML = `<div class="empty-state">
-                <div class="empty-icon">🧾</div>
-                <p>No expenses yet — add your first one!</p>
-            </div>`;
+            list.innerHTML = `<div class="empty-state text-center py-8 text-on-surface-variant">No expenses yet.</div>`;
             return;
         }
 
@@ -554,27 +593,33 @@ const UI = (() => {
         list.innerHTML = transactions
             .map((tx) => {
                 const payerName = _getMemberName(members, tx.paidBy, myId);
-                const icon = (tx.type === 'PAYMENT') ? '💸' : '💰';
-                const typeLabel = (tx.type === 'PAYMENT') ? 'Settlement' : 'Expense';
-                const amtClass = (tx.type === 'PAYMENT') ? 'settlement' : '';
+                const isPayment = tx.type === 'PAYMENT';
+                const emoji = isPayment ? '💸' : '🧾';
                 const txId = tx.serverId || tx.clientId;
-                const date = tx.createdAt ? new Date(tx.createdAt).toLocaleDateString() : '';
+                const date = tx.createdAt ? new Date(tx.createdAt).toLocaleDateString() : 'Today';
 
                 return `
-        <div class="expense-card clickable ${amtClass}" data-tx-id="${txId}" data-client-id="${tx.clientId}">
-          <div class="expense-icon">${icon}</div>
-          <div class="expense-info">
-            <div class="expense-desc">${escapeHtml(tx.description)}</div>
-            <div class="expense-meta">Paid by ${escapeHtml(payerName)} · split ${(tx.splits || []).length} ways · ${typeLabel}${date ? ' · ' + date : ''}</div>
-            ${tx.syncStatus === 'PENDING' ? '<span class="expense-unsynced">⏳ PENDING SYNC</span>' : ''}
+        <div class="glass-card rounded-lg p-5 flex items-center gap-4 cursor-pointer hover:bg-white/10 transition-colors clickable" data-tx-id="${txId}" data-client-id="${tx.clientId}">
+          <div class="w-14 h-14 bg-white/40 rounded-2xl flex items-center justify-center text-2xl shadow-inner shrink-0">${emoji}</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex justify-between items-start gap-2">
+              <h3 class="font-label-md text-on-surface truncate">${escapeHtml(tx.description)}</h3>
+              <span class="font-bold text-on-surface whitespace-nowrap">₹${Number(tx.amount).toFixed(2)}</span>
+            </div>
+            <div class="flex justify-between items-end mt-1">
+              <p class="text-label-sm text-on-surface-variant truncate">
+                Paid by <span class="text-primary font-bold">${escapeHtml(payerName)}</span>
+              </p>
+              <span class="text-label-sm text-outline shrink-0">${date}</span>
+            </div>
+            ${tx.syncStatus === 'PENDING' ? '<div class="text-label-sm text-[#d97706] mt-1">⏳ PENDING SYNC</div>' : ''}
           </div>
-          <div class="expense-amount">${(tx.type === 'PAYMENT') ? '-' : ''}₹${Number(tx.amount).toFixed(2)}</div>
         </div>`;
             })
             .join('');
 
         // Add click listeners for expense detail
-        list.querySelectorAll('.expense-card.clickable').forEach(card => {
+        list.querySelectorAll('.clickable').forEach(card => {
             card.addEventListener('click', () => {
                 const clientId = card.dataset.clientId;
                 const tx = transactions.find(t => t.clientId === clientId);
@@ -594,7 +639,7 @@ const UI = (() => {
         document.getElementById('detail-title').textContent = isPayment ? 'Settlement Details' : 'Expense Details';
         const badge = document.getElementById('detail-type-badge');
         badge.textContent = isPayment ? 'Payment' : 'Expense';
-        badge.className = `type-badge ${isPayment ? 'payment' : 'expense'}`;
+        badge.className = `px-3 py-1 rounded-full text-label-sm font-bold uppercase tracking-wider ${isPayment ? 'bg-secondary-container/20 text-secondary' : 'bg-primary-container/20 text-primary'}`;
 
         // Body
         document.getElementById('detail-amount').textContent = `₹${Number(tx.amount).toFixed(2)}`;
@@ -607,21 +652,22 @@ const UI = (() => {
                 year: 'numeric', month: 'short', day: 'numeric',
                 hour: '2-digit', minute: '2-digit'
             })
-            : '—';
+            : 'Today';
         document.getElementById('detail-date').textContent = dateStr;
 
         // Sync status
         const syncStatus = tx.syncStatus || 'SYNCED';
         const syncEl = document.getElementById('detail-sync-status');
-        syncEl.innerHTML = `<span class="detail-sync-badge ${syncStatus === 'SYNCED' ? 'synced' : 'pending'}">${syncStatus}</span>`;
+        const colorClass = syncStatus === 'SYNCED' ? 'bg-primary/10 text-primary' : 'bg-error/10 text-error';
+        syncEl.innerHTML = `<span class="px-2 py-0.5 rounded font-label-sm ${colorClass}">${syncStatus}</span>`;
 
         // Split breakdown
         const splitsList = document.getElementById('detail-splits-list');
         splitsList.innerHTML = (tx.splits || []).map(s => {
             const name = _getMemberName(members, s.userId, myId);
-            return `<div class="detail-split-row">
-                <span class="detail-split-name">${escapeHtml(name)}</span>
-                <span class="detail-split-amount">₹${Number(s.amount).toFixed(2)}</span>
+            return `<div class="flex justify-between items-center py-2 border-b border-outline-variant/5 last:border-0">
+                <span class="font-body-md text-on-surface-variant">${escapeHtml(name)}</span>
+                <span class="font-bold text-on-surface">₹${Number(s.amount).toFixed(2)}</span>
             </div>`;
         }).join('');
 
@@ -659,22 +705,23 @@ const UI = (() => {
         }
 
         container.innerHTML = `
-            <div class="group-overview-panel">
-                <div class="group-overview-header">
-                    <h4>📊 Analytics</h4>
+            <div class="glass-card rounded-xl p-6 space-y-6">
+                <div class="flex justify-between items-center">
+                    <h4 class="font-headline-md text-on-surface">Analytics</h4>
+                    <span class="material-symbols-outlined text-primary">analytics</span>
                 </div>
-                <div class="group-overview-grid">
-                    <div class="group-overview-card">
-                        <div class="group-overview-label">Group Spent</div>
-                        <div class="group-overview-value">₹${totalSpending.toFixed(2)}</div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div class="bg-surface-container-low p-4 rounded-xl border border-outline-variant/10">
+                        <span class="block text-label-sm text-outline mb-1">Group Spent</span>
+                        <span class="text-xl font-bold text-on-surface">₹${totalSpending.toFixed(2)}</span>
                     </div>
-                    <div class="group-overview-card">
-                        <div class="group-overview-label">Your Share</div>
-                        <div class="group-overview-value">₹${mySpent.toFixed(2)}</div>
+                    <div class="bg-surface-container-low p-4 rounded-xl border border-outline-variant/10">
+                        <span class="block text-label-sm text-outline mb-1">Your Share</span>
+                        <span class="text-xl font-bold text-on-surface">₹${mySpent.toFixed(2)}</span>
                     </div>
-                    <div class="group-overview-card">
-                        <div class="group-overview-label">You Paid</div>
-                        <div class="group-overview-value">₹${myPaid.toFixed(2)}</div>
+                    <div class="bg-surface-container-low p-4 rounded-xl border border-outline-variant/10">
+                        <span class="block text-label-sm text-outline mb-1">You Paid</span>
+                        <span class="text-xl font-bold text-on-surface">₹${myPaid.toFixed(2)}</span>
                     </div>
                 </div>
             </div>
@@ -694,12 +741,15 @@ const UI = (() => {
 
         container.classList.remove('hidden');
         container.innerHTML = `
-            <div class="group-sync-panel">
-                <div class="group-sync-header">
-                    <h4>⚠️ Sync Issues</h4>
-                    <span class="group-sync-badge">${issues.length} items</span>
+            <div class="bg-error/5 border border-error/20 rounded-xl p-5 flex gap-4 animate-pulse">
+                <span class="material-symbols-outlined text-error text-3xl">warning</span>
+                <div class="flex-1">
+                    <div class="flex items-center gap-2 mb-1">
+                        <h4 class="font-label-md text-error font-bold">Sync Issues</h4>
+                        <span class="bg-error text-white text-[10px] px-2 py-0.5 rounded-full">${issues.length} items</span>
+                    </div>
+                    <p class="text-label-sm text-on-surface-variant">Some transactions are pending sync or failed. We'll retry automatically when you're back online.</p>
                 </div>
-                <p class="group-sync-desc">These transactions are pending sync or failed to upload to the server. They will be retried automatically when you are online.</p>
             </div>
         `;
     }
@@ -722,10 +772,16 @@ const UI = (() => {
             .map((m) => {
                 const id = String(m._id || m.id || m);
                 const name = id === session.user.id ? 'Me' : (m.name || 'Member');
-                return `<label class="member-check-label">
-          <input type="checkbox" value="${id}" ${id === session.user.id ? 'checked' : ''} />
-          ${escapeHtml(name)}
-        </label>`;
+                const initial = name.charAt(0).toUpperCase();
+                const isChecked = id === session.user.id ? 'checked' : '';
+                return `
+                <label class="flex items-center justify-between p-3 rounded-lg bg-surface-container-high border border-outline-variant/20 cursor-pointer member-check-label hover:bg-surface-container-highest transition-colors">
+                  <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-primary-container/20 flex items-center justify-center font-bold text-primary">${initial}</div>
+                    <span class="font-body-md text-on-surface">${escapeHtml(name)}</span>
+                  </div>
+                  <input type="checkbox" value="${id}" class="accent-primary w-5 h-5" ${isChecked} />
+                </label>`;
             })
             .join('');
 
@@ -749,27 +805,52 @@ const UI = (() => {
         container.innerHTML = members.map(m => {
             const id = String(m._id || m.id || m);
             const name = id === currentUserId ? 'Me' : (m.name || 'Member');
-            return `<div class="split-input-row">
-                <span class="split-name">${escapeHtml(name)}</span>
-                <input type="number" class="split-val" data-user="${id}" placeholder="0" min="0" step="0.01" />
-                <span class="split-suffix">${suffix}</span>
+            const initial = name.charAt(0).toUpperCase();
+            return `
+            <div class="flex items-center justify-between p-3 rounded-lg bg-surface-container-high border border-outline-variant/20">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full bg-primary-container/20 flex items-center justify-center font-bold text-primary">${initial}</div>
+                    <span class="font-body-md text-on-surface">${escapeHtml(name)}</span>
+                </div>
+                <div class="relative w-24">
+                    <input type="number" class="split-val w-full py-1.5 pl-2 pr-6 bg-white border border-outline-variant/30 rounded-md outline-none focus:ring-2 focus:ring-primary text-right font-label-md" data-user="${id}" placeholder="0" min="0" step="0.01" />
+                    <span class="absolute right-2 top-1/2 -translate-y-1/2 text-label-sm text-outline-variant pointer-events-none">${suffix}</span>
+                </div>
             </div>`;
         }).join('');
     }
 
-    function renderSplitPreview(splits, members) {
+    function renderSplitPreview(splits, members, totalAmount = 0) {
         const preview = document.getElementById('exp-split-preview');
         if (!splits || splits.length === 0) {
-            preview.innerHTML = '';
+            preview.innerHTML = totalAmount > 0
+                ? `<div class="split-preview-title">Split Preview</div>
+                   <div class="split-preview-row">
+                     <span class="preview-name">Balance</span>
+                     <span class="preview-amount">₹${Number(totalAmount).toFixed(2)} to allocate</span>
+                   </div>`
+                : '';
             return;
         }
 
-        let html = `<div class="split-preview-title">Split Preview</div>`;
+        const allocated = splits.reduce((sum, split) => sum + (Number(split.amount) || 0), 0);
+        const balance = +(Number(totalAmount) - allocated).toFixed(2);
+        const balanceLabel = Math.abs(balance) <= 0.02
+            ? 'Balanced'
+            : balance > 0
+                ? `₹${balance.toFixed(2)} left`
+                : `Over by ₹${Math.abs(balance).toFixed(2)}`;
+
+        let html = `<div class="split-preview-title">Split Preview</div>
+            <div class="split-preview-row">
+                <span class="preview-name">Balance</span>
+                <span class="preview-amount">${balanceLabel}</span>
+            </div>`;
         html += splits.map(s => {
             const name = _getMemberName(members, s.userId);
-            return `<div class="split-preview-row">
-                <span class="preview-name">${escapeHtml(name)}</span>
-                <span class="preview-amount">₹${Number(s.amount).toFixed(2)}</span>
+            return `<div class="flex justify-between items-center text-on-surface">
+                <span>${escapeHtml(name)}</span>
+                <span class="font-bold">₹${Number(s.amount).toFixed(2)}</span>
             </div>`;
         }).join('');
         preview.innerHTML = html;
@@ -783,12 +864,18 @@ const UI = (() => {
 
         const target = isPercentage ? 100 : totalAmount;
         const suffix = isPercentage ? '%' : '';
-        const isValid = Math.abs(sum - target) <= 0.02;
+        const remaining = +(target - sum).toFixed(2);
+        const isValid = Math.abs(remaining) <= 0.02;
+        const statusText = remaining > 0.02
+            ? `Left to allocate: ${remaining.toFixed(2)}${suffix}`
+            : remaining < -0.02
+                ? `Over by: ${Math.abs(remaining).toFixed(2)}${suffix}`
+                : 'Fully allocated';
 
         const totalEl = container;
         totalEl.className = `split-total ${isValid ? 'valid' : 'invalid'}`;
-        totalEl.innerHTML = `<span>Total: ${sum.toFixed(2)}${suffix}</span>
-            <span>Target: ${target.toFixed(2)}${suffix}</span>`;
+        totalEl.innerHTML = `<span>${statusText}</span>
+            <span>${isValid ? 'Ready to save' : (remaining > 0.02 ? 'Keep filling' : 'Reduce values')}</span>`;
     }
 
     async function updateSyncIndicator(status = 'idle', data = {}) {

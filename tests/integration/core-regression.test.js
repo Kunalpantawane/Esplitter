@@ -132,7 +132,7 @@ describe('Core Regression Suite', () => {
         expect(balancesRes.body.balances[member.id].amount).toBe(-50);
     });
 
-    test('normal settlement mode and Razorpay order wiring work together', async () => {
+    test('manual payment settlement requires debtor payment and creditor confirmation', async () => {
         const admin = await registerUser('admin');
         const member = await registerUser('member');
 
@@ -168,25 +168,51 @@ describe('Core Regression Suite', () => {
         expect(balancesRes.body.mode).toBe('normal');
         expect(balancesRes.body.isSettled).toBe(false);
 
-        const orderRes = await request(app)
-            .post('/api/expenses/razorpay/order')
+        const requestRes = await request(app)
+            .post('/api/expenses')
             .set('Authorization', `Bearer ${admin.token}`)
             .send({
                 groupId: String(group._id),
-                amount: 25,
-                debtorId: admin.id,
-                creditorId: member.id,
-                clientId: 'test-client-id',
+                description: 'Payment request',
+                amount: 20,
+                paidBy: member.id,
+                splits: [{ userId: admin.id, amount: 20 }],
+                type: 'PAYMENT',
             });
 
-        if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-            expect(orderRes.statusCode).toBe(201);
-            expect(orderRes.body.order_id).toBeTruthy();
-            expect(orderRes.body.keyId).toBe(process.env.RAZORPAY_KEY_ID);
-        } else {
-            expect(orderRes.statusCode).toBe(503);
-            expect(orderRes.body.error).toMatch(/Razorpay is not configured/i);
-        }
+        expect(requestRes.statusCode).toBe(201);
+        expect(requestRes.body.transaction.status).toBe('PENDING');
+        const paymentId = requestRes.body.transaction._id;
+
+        const prematureConfirm = await request(app)
+            .patch(`/api/expenses/${paymentId}/settle-status`)
+            .set('Authorization', `Bearer ${admin.token}`)
+            .send({ status: 'CONFIRMED' });
+        expect(prematureConfirm.statusCode).toBe(400);
+
+        const paidRes = await request(app)
+            .patch(`/api/expenses/${paymentId}/settle-status`)
+            .set('Authorization', `Bearer ${member.token}`)
+            .send({ status: 'PAID' });
+        expect(paidRes.statusCode).toBe(200);
+        expect(paidRes.body.transaction.status).toBe('PAID');
+
+        const beforeConfirm = await request(app)
+            .get(`/api/expenses/${group._id}/balances?mode=normal`)
+            .set('Authorization', `Bearer ${admin.token}`);
+        expect(beforeConfirm.body.isSettled).toBe(false);
+
+        const confirmRes = await request(app)
+            .patch(`/api/expenses/${paymentId}/settle-status`)
+            .set('Authorization', `Bearer ${admin.token}`)
+            .send({ status: 'CONFIRMED' });
+        expect(confirmRes.statusCode).toBe(200);
+        expect(confirmRes.body.transaction.status).toBe('CONFIRMED');
+
+        const afterConfirm = await request(app)
+            .get(`/api/expenses/${group._id}/balances?mode=normal`)
+            .set('Authorization', `Bearer ${admin.token}`);
+        expect(afterConfirm.body.isSettled).toBe(true);
     });
 
     test('deleting expense keeps balances consistent and no orphan financial impact remains', async () => {
