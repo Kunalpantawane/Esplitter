@@ -428,14 +428,38 @@ async function openRazorpaySettlement(btn) {
 // ============ Event Listeners ============
 
 // Auth Tabs
+function setActiveAuthTab(tabName) {
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    const authTabIndicator = document.getElementById('auth-tab-indicator');
+
+    tabButtons.forEach((button) => {
+        const isActive = button.dataset.tab === tabName;
+        button.classList.toggle('active', isActive);
+        button.classList.toggle('text-on-primary', isActive);
+        button.classList.toggle('text-on-surface-variant', !isActive);
+        button.setAttribute('aria-pressed', String(isActive));
+    });
+
+    if (authTabIndicator) {
+        authTabIndicator.style.transform = tabName === 'register'
+            ? 'translateX(calc(100% + 6px))'
+            : 'translateX(0)';
+    }
+
+    document.querySelectorAll('.auth-form').forEach((form) => {
+        const isActive = form.id === `form-${tabName}`;
+        form.classList.toggle('active', isActive);
+        form.classList.toggle('hidden', !isActive);
+    });
+}
+
 document.querySelectorAll('.tab-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-        document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-        document.querySelectorAll('.auth-form').forEach((f) => f.classList.remove('active'));
-        btn.classList.add('active');
-        document.getElementById(`form-${btn.dataset.tab}`).classList.add('active');
+        setActiveAuthTab(btn.dataset.tab);
     });
 });
+
+setActiveAuthTab('login');
 
 // Login
 document.getElementById('form-login').addEventListener('submit', async (e) => {

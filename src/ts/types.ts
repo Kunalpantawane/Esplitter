@@ -98,11 +98,10 @@ export interface Budget {
 }
 
 // API Response types
-export interface ApiResponse<T = unknown> {
+export type ApiResponse<T = unknown> = {
   error?: string;
   message?: string;
-  ...T;
-}
+} & T;
 
 export interface SyncPayload {
   lastSyncAt: string | null;
