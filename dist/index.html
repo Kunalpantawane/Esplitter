@@ -142,7 +142,19 @@
       25% { transform: translateX(-6px); }
       75% { transform: translateX(6px); }
     }
-  </style>
+    /* T&C Checkbox */
+    #reg-terms:checked + label {
+      background-color: #006950;
+      border-color: #006950;
+    }
+    #reg-terms:checked + label .tc-check-icon {
+      display: block;
+    }
+    #reg-terms + label .tc-check-icon {
+      display: none;
+    }
+  </style>
+
   <link rel="manifest" href="/assets/manifest-C0Q9xZxz.json" />
   <link rel="stylesheet" crossorigin href="/assets/index-D90UZLFu.css">
 </head>
@@ -250,7 +262,32 @@
                     </div>
                 </div>
             </div>
-            <button type="submit" class="w-full mt-4 bg-gradient-to-r from-primary to-primary-container text-on-primary py-4 rounded-full font-headline-md text-headline-md shadow-[0_10px_25px_-5px_rgba(15,143,111,0.4)] active:scale-95 transition-all hover:opacity-90">
+            <!-- Terms & Conditions -->
+            <div class="flex items-start gap-3 px-1">
+              <div class="relative flex-shrink-0 mt-0.5">
+                <input
+                  id="reg-terms"
+                  type="checkbox"
+                  class="peer sr-only"
+                  required
+                />
+                <label
+                  for="reg-terms"
+                  class="flex items-center justify-center w-5 h-5 rounded-md border-2 border-outline-variant bg-white/40 cursor-pointer transition-all peer-checked:bg-primary peer-checked:border-primary hover:border-primary/60"
+                >
+                  <span class="material-symbols-outlined text-white text-[14px] hidden peer-checked:block tc-check-icon">check</span>
+                </label>
+              </div>
+              <p class="font-label-sm text-on-surface-variant leading-5">
+                I have read and agree to the
+                <button
+                  type="button"
+                  id="btn-show-terms"
+                  class="text-primary font-semibold underline underline-offset-2 hover:text-primary-container transition-colors"
+                >Terms &amp; Conditions</button>
+              </p>
+            </div>
+            <button type="submit" class="w-full mt-2 bg-gradient-to-r from-primary to-primary-container text-on-primary py-4 rounded-full font-headline-md text-headline-md shadow-[0_10px_25px_-5px_rgba(15,143,111,0.4)] active:scale-95 transition-all hover:opacity-90">
                 Create Account
             </button>
             <p id="register-error" class="form-error"></p>
@@ -592,6 +629,32 @@
             Cancel
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Terms & Conditions Modal -->
+  <div id="modal-terms" class="modal-overlay hidden fixed inset-0 z-[70] items-center justify-center p-margin-mobile glass-overlay" role="dialog" aria-modal="true" aria-labelledby="terms-title">
+    <div class="glass-card w-full max-w-[560px] max-h-[85vh] rounded-xl animate-fade-in shadow-2xl flex flex-col overflow-hidden">
+      <div class="px-8 pt-8 pb-4 flex-shrink-0 border-b border-outline-variant/20">
+        <h3 id="terms-title" class="font-headline-md text-headline-md text-on-surface">Terms &amp; Conditions</h3>
+        <p class="font-label-sm text-on-surface-variant mt-1">Effective: June 2025 · Esplitter</p>
+      </div>
+      <div class="px-8 py-6 overflow-y-auto space-y-6 flex-1 text-body-md text-on-surface leading-relaxed">
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">1. Acceptance</h4><p>By creating an account, you confirm that you are at least 18 years old and agree to be bound by these Terms. If you do not agree, you must not use Esplitter.</p></section>
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">2. Service Description</h4><p>Esplitter is a personal and group expense-tracking application. It lets you record expenses, split bills with friends or groups, track personal budgets, and settle balances through UPI payment references. Esplitter is <strong>not a payment processor</strong> and does not move money on your behalf.</p></section>
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">3. Account &amp; UPI ID</h4><ul class="list-disc pl-5 space-y-1"><li>You are responsible for keeping your password secure.</li><li>Your UPI ID is stored so group members can send you settlement payments directly via any UPI-enabled app. Esplitter does not initiate or verify these transfers.</li><li>Notify us immediately if you suspect unauthorised access to your account.</li></ul></section>
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">4. Data &amp; Privacy</h4><ul class="list-disc pl-5 space-y-1"><li>We collect only the information required to operate the service: your name, email, UPI ID, and expense data you enter.</li><li>Your expense data is synced to our servers to enable multi-device access and group collaboration.</li><li>We do not sell your data to third parties.</li><li>Expense data shared inside a group is visible to all members of that group.</li></ul></section>
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">5. Offline-First Behaviour</h4><p>Esplitter stores data locally in your browser (IndexedDB) to work offline. Data entered offline is synced to the server when you reconnect. You are responsible for any discrepancies that arise if the same expense is entered on multiple devices before syncing.</p></section>
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">6. Group Conduct</h4><ul class="list-disc pl-5 space-y-1"><li>Do not add fraudulent or false expenses.</li><li>Do not use the platform to harass other group members.</li><li>Group admins may remove members and manage group settings.</li></ul></section>
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">7. Settlements</h4><p>Settlement status (Pending → Paid → Confirmed) is tracked within the app for record-keeping only. Marking a settlement as paid does not constitute proof of actual payment. Disputes between group members are outside the scope of Esplitter's service.</p></section>
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">8. Limitation of Liability</h4><p>Esplitter is provided "as is" without warranty of any kind. We are not liable for financial losses arising from use of the app, incorrect expense entries, missed settlements, or any reliance on data shown within the application.</p></section>
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">9. Modifications</h4><p>We may update these Terms at any time. Continued use of the service after changes are posted constitutes your acceptance of the revised Terms.</p></section>
+        <section><h4 class="font-label-md text-primary uppercase tracking-widest mb-2">10. Contact</h4><p>For questions about these Terms, please contact us through the app or reach out to the project maintainer via the repository.</p></section>
+      </div>
+      <div class="px-8 py-5 flex-shrink-0 border-t border-outline-variant/20 flex gap-3 flex-col sm:flex-row-reverse">
+        <button id="btn-terms-accept" class="flex-1 py-3 bg-gradient-to-r from-primary to-primary-container text-on-primary font-label-md rounded-full shadow-md active:scale-95 transition-transform">I Agree</button>
+        <button id="btn-terms-close" class="flex-1 py-3 text-on-surface-variant font-label-md rounded-full hover:bg-surface-container-high transition-colors">Close</button>
       </div>
     </div>
   </div>

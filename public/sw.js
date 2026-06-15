@@ -4,7 +4,7 @@
 const CACHE_NAME = 'esplitter-v6';
 
 // Local-only resources that MUST be cached for the app to work offline.
-// Do NOT include external CDN URLs here — a single network failure during install
+// Do NOT include external CDN URLs here - a single network failure during install
 // aborts the entire service worker installation.
 const APP_SHELL = [
     '/',
@@ -29,7 +29,7 @@ const CDN_SHELL = [
 self.addEventListener('install', (event) => {
     event.waitUntil(
         caches.open(CACHE_NAME).then(async (cache) => {
-            // Cache local resources first — these must succeed
+            // Cache local resources first - these must succeed
             await cache.addAll(APP_SHELL);
             // Try to warm the CDN cache gracefully; failures are non-fatal
             for (const url of CDN_SHELL) {

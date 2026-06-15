@@ -499,6 +499,11 @@ document.getElementById('form-register').addEventListener('submit', async (e) =>
     btn.textContent = 'Registering...';
     err.textContent = '';
     try {
+        // Terms & Conditions must be accepted
+        if (!document.getElementById('reg-terms').checked) {
+            throw new Error('You must accept the Terms & Conditions to create an account.');
+        }
+
         const regUpi = normalizeUpiId(document.getElementById('reg-upi').value);
         if (!isLikelyValidUpiId(regUpi)) {
             throw new Error('Enter a valid UPI ID (example: yourname@bank).');
@@ -523,6 +528,55 @@ document.getElementById('form-register').addEventListener('submit', async (e) =>
         btn.textContent = originalText;
     }
 });
+
+// ---- Terms & Conditions Modal ----
+(function setupTermsModal() {
+    const modal = document.getElementById('modal-terms');
+    const checkbox = document.getElementById('reg-terms');
+
+    function openTerms() {
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    }
+
+    function closeTerms() {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+
+    // "Terms & Conditions" link in the register form
+    document.getElementById('btn-show-terms').addEventListener('click', openTerms);
+
+    // "I Agree" button — checks the box and closes
+    document.getElementById('btn-terms-accept').addEventListener('click', () => {
+        checkbox.checked = true;
+        // Manually trigger visual update since input is sr-only
+        const label = document.querySelector('label[for="reg-terms"]');
+        if (label) label.classList.add('bg-primary', 'border-primary');
+        closeTerms();
+    });
+
+    // "Close" button — just closes (leaves checkbox state as-is)
+    document.getElementById('btn-terms-close').addEventListener('click', closeTerms);
+
+    // Click outside modal card to close
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeTerms();
+    });
+
+    // Sync label styling with checkbox state when clicked directly
+    if (checkbox) {
+        checkbox.addEventListener('change', () => {
+            const label = document.querySelector('label[for="reg-terms"]');
+            if (!label) return;
+            if (checkbox.checked) {
+                label.classList.add('bg-primary', 'border-primary');
+            } else {
+                label.classList.remove('bg-primary', 'border-primary');
+            }
+        });
+    }
+})();
 
 // Logout (header button)
 document.getElementById('btn-logout').addEventListener('click', async () => {
